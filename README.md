@@ -1,7 +1,37 @@
-# Tauri + React + Typescript
+# aide
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
+AI Development Environment config manager.
 
-## Recommended IDE Setup
+A unified hub for managing cross-agent AI configurations — Skills, MCP, and model configs — with multi-agent compatibility (Claude Code, OpenCode, Cursor, Zed, etc.).
 
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+## Features
+
+- **File Explorer**: Directory tree + file list with natural sorting
+- **Code Editor**: CodeMirror 6 with JSON Schema validation, Markdown support, dark theme
+- **Multi-Tab**: Open multiple files, Cmd+S to save, dirty indicators
+- **Extensible**: Designed for Skills sync, MCP config translation, model config abstraction
+
+## Tech Stack
+
+| Layer | Tech |
+|---|---|
+| Desktop | Tauri v2 |
+| Frontend | React 19 + TypeScript 6 + Vite 8 |
+| Editor | CodeMirror 6 |
+| Backend | Rust (`std::fs` CRUD) |
+| Package | pnpm 11 |
+
+## Getting Started
+
+```bash
+pnpm tauri dev
+```
+
+## Project
+
+```bash
+src/               # React frontend
+src-tauri/         # Rust backend + Tauri config
+├── src/lib.rs     # File CRUD commands
+└── src/main.rs    # Entry point
+```
