@@ -2,9 +2,10 @@ use std::path::Path;
 use std::time::SystemTime;
 use std::{fs, io};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 mod adapter;
+mod mcp;
 
 #[derive(Debug, Serialize)]
 pub struct FileEntry {
@@ -434,6 +435,142 @@ fn list_tools() -> Vec<ToolInfo> {
         .collect()
 }
 
+#[derive(Serialize, Deserialize)]
+pub struct McpServerView {
+    pub name: String,
+    pub command: Option<String>,
+    pub args: Option<Vec<String>>,
+    pub url: Option<String>,
+    pub env: Option<std::collections::HashMap<String, String>>,
+    pub disabled: Option<bool>,
+    pub description: Option<String>,
+    pub targets: Vec<String>,
+}
+
+#[tauri::command]
+fn list_mcp_servers() -> Result<Vec<McpServerView>, String> {
+    let config = mcp::read_central()?;
+    Ok(config
+        .servers
+        .into_iter()
+        .map(|(name, s)| McpServerView {
+            name,
+            command: s.command,
+            args: s.args,
+            url: s.url,
+            env: s.env,
+            disabled: s.disabled,
+            description: s.description,
+            targets: s.targets,
+        })
+        .collect())
+}
+
+#[tauri::command]
+fn save_mcp_servers(servers: Vec<McpServerView>) -> Result<(), String> {
+    let config = mcp::McpCentralConfig {
+        servers: servers
+            .into_iter()
+            .map(|s| {
+                let name = s.name;
+                (name, mcp::McpServerConfig {
+                    command: s.command,
+                    args: s.args,
+                    url: s.url,
+                    env: s.env,
+                    disabled: s.disabled,
+                    description: s.description,
+                    targets: s.targets,
+                })
+            })
+            .collect(),
+    };
+    mcp::save_central(&config)
+}
+
+#[derive(Serialize)]
+pub struct McpSyncResult {
+    pub key: String,
+    pub name: String,
+    pub skipped: bool,
+    pub message: String,
+}
+
+#[tauri::command]
+fn sync_mcp_tool(tool_key: String) -> Result<McpSyncResult, String> {
+    let adapter = mcp::all_mcp_adapters()
+        .into_iter()
+        .find(|a| a.key == tool_key)
+        .ok_or_else(|| format!("Unknown tool: {}", tool_key))?;
+    let config = mcp::read_central()?;
+    let result = mcp::sync_to_tool(&adapter, &config)?;
+    Ok(McpSyncResult {
+        key: tool_key,
+        name: adapter.name.to_string(),
+        skipped: result.skipped,
+        message: result.message,
+    })
+}
+
+#[tauri::command]
+fn sync_mcp_all() -> Vec<McpSyncResult> {
+    let config = mcp::read_central().ok();
+    let config = match config {
+        Some(c) => c,
+        None => return vec![],
+    };
+    mcp::all_mcp_adapters()
+        .into_iter()
+        .filter_map(|adapter| {
+            let result = mcp::sync_to_tool(&adapter, &config).ok()?;
+            Some(McpSyncResult {
+                key: adapter.key.to_string(),
+                name: adapter.name.to_string(),
+                skipped: result.skipped,
+                message: result.message,
+            })
+        })
+        .collect()
+}
+
+#[derive(Serialize)]
+pub struct ImportResult {
+    pub source: String,
+    pub imported: Vec<String>,
+    pub skipped: Vec<String>,
+}
+
+#[tauri::command]
+fn import_mcp_all() -> Vec<ImportResult> {
+    let mut central = match mcp::read_central() {
+        Ok(c) => c,
+        Err(_) => return vec![],
+    };
+    let mut results = Vec::new();
+    for adapter in mcp::all_mcp_adapters() {
+        match mcp::import_from_adapter(&adapter, &mut central) {
+            Ok(result) => {
+                if !result.imported.is_empty() || !result.skipped.is_empty() {
+                    results.push(ImportResult {
+                        source: result.source,
+                        imported: result.imported,
+                        skipped: result.skipped,
+                    });
+                }
+            }
+            Err(_e) => {
+                results.push(ImportResult {
+                    source: adapter.name.to_string(),
+                    imported: vec![],
+                    skipped: vec![],
+                });
+            }
+        }
+    }
+    let _ = mcp::save_central(&central);
+    results
+}
+
 #[tauri::command]
 fn get_home_dir() -> String {
     dirs::home_dir()
@@ -448,6 +585,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             list_tools,
+            list_mcp_servers,
+            save_mcp_servers,
+            sync_mcp_tool,
+            sync_mcp_all,
+            import_mcp_all,
             check_sync_statuses,
             sync_tool,
             sync_all_tools,

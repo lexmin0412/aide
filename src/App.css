@@ -87,6 +87,22 @@ html, body, #root {
 .app-page {
   flex: 1;
   overflow: hidden;
+  position: relative;
+}
+
+.app-panel {
+  position: absolute;
+  inset: 0;
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity 0.15s;
+  pointer-events: none;
+}
+
+.app-panel.active {
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
 }
 
 /* ===== Skill Grid (Home) ===== */
@@ -879,4 +895,379 @@ html, body, #root {
   height: 100%;
   color: var(--text-muted);
   font-size: 13px;
+}
+
+/* ===== MCP Page ===== */
+
+.mcp-page {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 24px 32px;
+}
+
+.mcp-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.mcp-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: #e8e8e8;
+  margin: 0;
+}
+
+.mcp-subtitle {
+  font-size: 12px;
+  color: #666;
+  margin: 4px 0 0;
+}
+
+.mcp-header-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.mcp-btn {
+  background: none;
+  border: 1px solid #333;
+  border-radius: 6px;
+  color: #bbb;
+  font-size: 12px;
+  font-family: var(--font-sans);
+  padding: 6px 14px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.mcp-btn:hover {
+  border-color: #555;
+  color: #e8e8e8;
+}
+
+.mcp-btn.primary {
+  background: #252525;
+  border-color: #444;
+  color: #d4d4d4;
+}
+
+.mcp-btn.primary:hover {
+  background: #2a2a2a;
+  border-color: #555;
+}
+
+.mcp-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 0 16px;
+  border-bottom: 1px solid #222;
+  margin-bottom: 16px;
+}
+
+.mcp-toolbar-label {
+  font-size: 11px;
+  color: #666;
+  margin-right: 6px;
+}
+
+.mcp-tool-btn {
+  background: none;
+  border: 1px solid #2a2a2a;
+  border-radius: 4px;
+  color: #777;
+  font-size: 11px;
+  font-family: var(--font-sans);
+  padding: 3px 10px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.mcp-tool-btn:hover {
+  border-color: #444;
+  color: #bbb;
+}
+
+.mcp-tool-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.mcp-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #555;
+  font-size: 13px;
+}
+
+.mcp-list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mcp-card {
+  background: #1a1a1a;
+  border: 1px solid #252525;
+  border-radius: 8px;
+  padding: 14px 16px;
+}
+
+.mcp-card.disabled {
+  opacity: 0.4;
+}
+
+.mcp-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.mcp-card-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.mcp-card-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: #d4d4d4;
+}
+
+.mcp-card-type {
+  font-size: 11px;
+  color: #555;
+}
+
+.mcp-badge {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  margin-left: 6px;
+}
+
+.mcp-badge.muted {
+  background: #222;
+  color: #666;
+}
+
+.mcp-card-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.mcp-icon-btn {
+  background: none;
+  border: none;
+  color: #555;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  font-size: 13px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.mcp-icon-btn:hover {
+  color: #ccc;
+  background: #252525;
+}
+
+.mcp-icon-btn.danger:hover {
+  color: #e06c6c;
+}
+
+.mcp-icon-btn.small {
+  font-size: 10px;
+  padding: 2px 4px;
+}
+
+.mcp-card-detail {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 11px;
+}
+
+.mcp-detail-item code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: #888;
+  background: #1e1e1e;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.mcp-detail-desc {
+  color: #666;
+}
+
+.mcp-detail-targets {
+  color: #5b9bd5;
+}
+
+.mcp-detail-env {
+  color: #888;
+}
+
+/* ===== MCP Form ===== */
+
+.mcp-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.mcp-form {
+  background: #1a1a1a;
+  border: 1px solid #2a2a2a;
+  border-radius: 12px;
+  width: 480px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.mcp-form-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px 0;
+}
+
+.mcp-form-header h2 {
+  font-size: 16px;
+  font-weight: 500;
+  color: #e8e8e8;
+  margin: 0;
+}
+
+.mcp-form-body {
+  padding: 20px 24px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.mcp-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.mcp-field > span {
+  font-size: 11px;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.mcp-field input, .mcp-field select {
+  background: #1e1e1e;
+  border: 1px solid #2a2a2a;
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: #ccc;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.mcp-field input:focus, .mcp-field select:focus {
+  border-color: #444;
+}
+
+.mcp-targets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.mcp-target-check {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: #999;
+  cursor: pointer;
+}
+
+.mcp-target-check input {
+  accent-color: #5b9bd5;
+}
+
+.mcp-env-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mcp-env-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.mcp-env-row input {
+  flex: 1;
+}
+
+.mcp-add-env {
+  background: none;
+  border: 1px dashed #333;
+  border-radius: 4px;
+  color: #666;
+  font-size: 11px;
+  font-family: var(--font-sans);
+  padding: 6px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.mcp-add-env:hover {
+  border-color: #555;
+  color: #999;
+}
+
+.mcp-form-footer {
+  padding: 0 24px 20px;
+}
+
+.mcp-json-input {
+  background: #1e1e1e;
+  border: 1px solid #2a2a2a;
+  border-radius: 6px;
+  padding: 10px;
+  color: #ccc;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  outline: none;
+  resize: vertical;
+  min-height: 120px;
+  transition: border-color 0.15s;
+}
+
+.mcp-json-input:focus {
+  border-color: #444;
+}
+
+.mcp-json-error {
+  color: #e06c6c;
+  font-size: 12px;
 }
