@@ -4,6 +4,8 @@ use std::{fs, io};
 
 use serde::Serialize;
 
+mod adapter;
+
 #[derive(Debug, Serialize)]
 pub struct FileEntry {
     pub name: String,
@@ -216,6 +218,222 @@ fn file_exists(path: String) -> bool {
     Path::new(&path).exists()
 }
 
+#[derive(Serialize)]
+pub struct ToolInfo {
+    key: String,
+    name: String,
+    global_skills: String,
+    detect_dir: String,
+    project_skills: String,
+    status: String,
+}
+
+fn tool_dir_exists(relative: &str) -> bool {
+    let home = match dirs::home_dir() {
+        Some(h) => h,
+        None => return false,
+    };
+    home.join(relative).exists()
+}
+
+fn resolve_skills_source() -> Result<std::path::PathBuf, String> {
+    dirs::home_dir()
+        .map(|h| h.join(".agents").join("skills"))
+        .ok_or_else(|| "Cannot find home directory".to_string())
+}
+
+fn compute_tool_status(t: &adapter::ToolInfo) -> String {
+    if !tool_dir_exists(t.detect_dir) {
+        return "not_installed".into();
+    }
+    if t.global_skills == ".agents/skills" {
+        return "compatible".into();
+    }
+    let home = match dirs::home_dir() {
+        Some(h) => h,
+        None => return "unknown".into(),
+    };
+    let target = home.join(t.global_skills);
+    if target.is_symlink() {
+        if let Ok(link) = std::fs::read_link(&target) {
+            if link == resolve_skills_source().unwrap_or_default() {
+                return "synced".into();
+            }
+        }
+    }
+    if target.exists() {
+        return "has_content".into();
+    }
+    "ready".into()
+}
+
+#[tauri::command]
+fn check_sync_statuses() -> Vec<ToolInfo> {
+    adapter::all_tools()
+        .into_iter()
+        .map(|t| {
+            let status = compute_tool_status(&t);
+            ToolInfo {
+                key: t.key.to_string(),
+                name: t.name.to_string(),
+                global_skills: t.global_skills.to_string(),
+                detect_dir: t.detect_dir.to_string(),
+                project_skills: t.project_skills.to_string(),
+                status,
+            }
+        })
+        .collect()
+}
+
+#[derive(Serialize)]
+pub struct SyncResult {
+    pub key: String,
+    pub name: String,
+    pub success: bool,
+    pub merged: Vec<String>,
+    pub conflicts: Vec<String>,
+    pub error: Option<String>,
+}
+
+fn gather_skills(dir: &Path) -> io::Result<Vec<String>> {
+    let mut skills = Vec::new();
+    if !dir.exists() {
+        return Ok(skills);
+    }
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        if path.join("SKILL.md").exists() {
+            skills.push(entry.file_name().to_string_lossy().to_string());
+        }
+    }
+    Ok(skills)
+}
+
+#[tauri::command]
+fn sync_tool(tool_key: String) -> Result<SyncResult, String> {
+    let tool = adapter::all_tools()
+        .into_iter()
+        .find(|t| t.key == tool_key)
+        .ok_or_else(|| format!("Unknown tool: {}", tool_key))?;
+
+    if tool.global_skills == ".agents/skills" {
+        return Ok(SyncResult {
+            key: tool_key,
+            name: tool.name.to_string(),
+            success: true,
+            merged: vec![],
+            conflicts: vec![],
+            error: None,
+        });
+    }
+
+    let source = resolve_skills_source()?;
+    let home = dirs::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
+    let target = home.join(tool.global_skills);
+
+    if !source.exists() {
+        return Ok(SyncResult {
+            key: tool_key,
+            name: tool.name.to_string(),
+            success: true,
+            merged: vec![],
+            conflicts: vec![],
+            error: Some("Source ~/.agents/skills does not exist".into()),
+        });
+    }
+
+    // Already a symlink pointing to source
+    if target.is_symlink() {
+        if let Ok(link) = std::fs::read_link(&target) {
+            if link == source {
+                return Ok(SyncResult {
+                    key: tool_key,
+                    name: tool.name.to_string(),
+                    success: true,
+                    merged: vec![],
+                    conflicts: vec![],
+                    error: None,
+                });
+            }
+        }
+        std::fs::remove_file(&target).map_err(|e| e.to_string())?;
+    }
+
+    let mut merged = Vec::new();
+    let mut conflicts = Vec::new();
+
+    if target.exists() && !target.is_symlink() {
+        let target_skills = gather_skills(&target).map_err(|e| e.to_string())?;
+        for skill in &target_skills {
+            let src_skill_dir = source.join(skill);
+            let tgt_skill_dir = target.join(skill);
+
+            if !src_skill_dir.exists() {
+                if let Ok(_) = fs::rename(&tgt_skill_dir, &src_skill_dir) {
+                    merged.push(skill.clone());
+                }
+            } else {
+                conflicts.push(skill.clone());
+            }
+        }
+
+        fs::remove_dir_all(&target).map_err(|e| e.to_string())?;
+    }
+
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "macos")]
+    std::os::unix::fs::symlink(&source, &target).map_err(|e| e.to_string())?;
+    #[cfg(not(target_os = "macos"))]
+    return Err("Symlink not supported on this platform".to_string());
+
+    Ok(SyncResult {
+        key: tool_key,
+        name: tool.name.to_string(),
+        success: conflicts.is_empty(),
+        merged,
+        conflicts,
+        error: None,
+    })
+}
+
+#[tauri::command]
+fn sync_all_tools() -> Vec<SyncResult> {
+    let tools = adapter::all_tools();
+    tools
+        .into_iter()
+        .filter_map(|t| {
+            if t.global_skills == ".agents/skills" {
+                return None;
+            }
+            sync_tool(t.key.to_string()).ok()
+        })
+        .collect()
+}
+
+#[tauri::command]
+fn list_tools() -> Vec<ToolInfo> {
+    adapter::all_tools()
+        .into_iter()
+        .map(|t| {
+            let status = compute_tool_status(&t);
+            ToolInfo {
+                key: t.key.to_string(),
+                name: t.name.to_string(),
+                global_skills: t.global_skills.to_string(),
+                detect_dir: t.detect_dir.to_string(),
+                project_skills: t.project_skills.to_string(),
+                status,
+            }
+        })
+        .collect()
+}
+
 #[tauri::command]
 fn get_home_dir() -> String {
     dirs::home_dir()
@@ -229,6 +447,10 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
+            list_tools,
+            check_sync_statuses,
+            sync_tool,
+            sync_all_tools,
             list_skills,
             list_directory,
             read_text_file,
