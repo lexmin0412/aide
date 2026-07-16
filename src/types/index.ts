@@ -14,3 +14,17 @@ export interface EditorTab {
   is_dirty: boolean
   language: string
 }
+
+export interface SkillInfo {
+  name: string
+  display_name: string
+  description: string
+  path: string
+  is_symlink: boolean
+  target_path: string | null
+  file_count: number
+}
+
+export type ViewState =
+  | { type: "home" }
+  | { type: "skill"; skill: SkillInfo }

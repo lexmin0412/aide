@@ -14,6 +14,17 @@ pub struct FileEntry {
     pub extension: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct SkillInfo {
+    pub name: String,
+    pub display_name: String,
+    pub description: String,
+    pub path: String,
+    pub is_symlink: bool,
+    pub target_path: Option<String>,
+    pub file_count: usize,
+}
+
 fn read_dir_entries(path: &Path) -> io::Result<Vec<FileEntry>> {
     let mut entries = Vec::new();
     for entry in fs::read_dir(path)? {
@@ -38,6 +49,115 @@ fn read_dir_entries(path: &Path) -> io::Result<Vec<FileEntry>> {
     }
     entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then(a.name.cmp(&b.name)));
     Ok(entries)
+}
+
+fn count_files(path: &Path) -> usize {
+    let mut count = 0;
+    if let Ok(entries) = fs::read_dir(path) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if !matches!(name.as_str(), "node_modules" | ".git" | ".pnpm" | "dist" | ".next" | "target") {
+                    count += 1;
+                }
+            } else {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+fn parse_skill_frontmatter(content: &str) -> (Option<String>, Option<String>) {
+    let content = content.trim();
+    if !content.starts_with("---") {
+        return (None, None);
+    }
+    let rest = content[3..].trim();
+    if let Some(end) = rest.find("---") {
+        let yaml_str = &rest[..end];
+        if let Ok(val) = serde_yaml::from_str::<serde_yaml::Value>(yaml_str) {
+            let mapping = match &val {
+                serde_yaml::Value::Mapping(m) => m,
+                _ => return (None, None),
+            };
+            let name = mapping
+                .get(&serde_yaml::Value::String("name".into()))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let desc = mapping
+                .get(&serde_yaml::Value::String("description".into()))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            return (name, desc);
+        }
+    }
+    (None, None)
+}
+
+#[tauri::command]
+fn list_skills() -> Result<Vec<SkillInfo>, String> {
+    let skills_dir = dirs::home_dir()
+        .ok_or_else(|| "Cannot find home directory".to_string())?
+        .join(".agents")
+        .join("skills");
+
+    if !skills_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut skills = Vec::new();
+    for entry in fs::read_dir(&skills_dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+
+        let name = entry.file_name().to_string_lossy().to_string();
+        let meta = entry.metadata().map_err(|e| e.to_string())?;
+        let is_symlink = meta.is_symlink();
+        let target_path = if is_symlink {
+            fs::read_link(&path).ok().map(|p| p.to_string_lossy().to_string())
+        } else {
+            None
+        };
+
+        let (display_name, description) = {
+            let skill_md = path.join("SKILL.md");
+            if skill_md.exists() {
+                if let Ok(content) = fs::read_to_string(&skill_md) {
+                    let (n, d) = parse_skill_frontmatter(&content);
+                    (n.unwrap_or_else(|| name.clone()), d.unwrap_or_default())
+                } else {
+                    (name.clone(), String::new())
+                }
+            } else {
+                (name.clone(), String::new())
+            }
+        };
+
+        let file_count = if is_symlink {
+            let real_path = fs::read_link(&path).unwrap_or(path.clone());
+            count_files(&real_path)
+        } else {
+            count_files(&path)
+        };
+
+        skills.push(SkillInfo {
+            name: name.clone(),
+            display_name,
+            description,
+            path: path.to_string_lossy().to_string(),
+            is_symlink,
+            target_path,
+            file_count,
+        });
+    }
+
+    skills.sort_by(|a, b| a.display_name.cmp(&b.display_name));
+    Ok(skills)
 }
 
 #[tauri::command]
@@ -109,6 +229,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
+            list_skills,
             list_directory,
             read_text_file,
             write_text_file,
