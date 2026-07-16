@@ -81,6 +81,9 @@ export function SkillDetail({ skill, onBack }: SkillDetailProps) {
             {skill.is_symlink ? "\uD83D\uDD17 " : ""}{skill.display_name}
           </span>
           <span className="skill-detail-path">{skill.path}</span>
+          {skill.is_symlink && skill.target_path && (
+            <span className="skill-detail-symlink">{"\u2192"} {skill.target_path}</span>
+          )}
         </div>
       </div>
       <div className="skill-detail-body">

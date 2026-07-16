@@ -196,6 +196,12 @@ html, body, #root {
   font-family: var(--font-mono);
 }
 
+.skill-detail-symlink {
+  font-size: 11px;
+  color: var(--accent);
+  font-family: var(--font-mono);
+}
+
 .skill-detail-body {
   flex: 1;
   display: flex;
