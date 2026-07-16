@@ -33,6 +33,60 @@ html, body, #root {
 .app {
   height: 100%;
   width: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ===== Top Navigation ===== */
+
+.app-nav {
+  display: flex;
+  align-items: center;
+  height: 40px;
+  padding: 0 16px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+  gap: 20px;
+}
+
+.app-nav-brand {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 0.5px;
+}
+
+.app-nav-tabs {
+  display: flex;
+  gap: 2px;
+}
+
+.app-nav-tab {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-family: var(--font-sans);
+  padding: 4px 12px;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.app-nav-tab:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.app-nav-tab.active {
+  color: #fff;
+  background: var(--bg-tertiary);
+}
+
+.app-page {
+  flex: 1;
+  overflow: hidden;
 }
 
 /* ===== Skill Grid (Home) ===== */
@@ -726,4 +780,103 @@ html, body, #root {
 .file-list-panel {
   height: 100%;
   overflow-y: auto;
+}
+
+/* ===== Config Panel ===== */
+
+.config-panel {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.config-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.config-toolbar-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.config-tool-list {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+}
+
+.config-tool-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-family: var(--font-sans);
+  padding: 3px 10px;
+  cursor: pointer;
+  border-radius: 4px;
+  white-space: nowrap;
+  transition: color 0.15s, background 0.15s;
+}
+
+.config-tool-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.config-tool-btn.active {
+  color: #fff;
+  background: var(--bg-tertiary);
+}
+
+.config-body {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+.config-sidebar {
+  width: 260px;
+  min-width: 200px;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+}
+
+.config-sidebar-header {
+  padding: 8px 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.config-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.config-editor {
+  flex: 1;
+  overflow: hidden;
+}
+
+.config-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-muted);
+  font-size: 13px;
 }

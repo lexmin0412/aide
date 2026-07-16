@@ -25,6 +25,11 @@ export interface SkillInfo {
   file_count: number
 }
 
-export type ViewState =
-  | { type: "home" }
-  | { type: "skill"; skill: SkillInfo }
+export interface ToolInfo {
+  key: string
+  name: string
+  global_skills: string
+  detect_dir: string
+  project_skills: string
+  status: string
+}
