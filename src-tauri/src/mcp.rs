@@ -112,22 +112,45 @@ pub fn sync_to_tool(adapter: &McpAdapter, central: &McpCentralConfig) -> Result<
         return Ok(SyncMcpResult { skipped: true, message: "No servers to sync".into() });
     }
 
+    let is_adapter_format = adapter.key == "opencode" || adapter.key == "mimocode";
     let server_map: HashMap<&String, serde_json::Value> = enabled_servers
         .iter()
         .map(|(name, cfg)| {
             let mut map = serde_json::Map::new();
-            if let Some(cmd) = &cfg.command {
-                map.insert("command".into(), serde_json::Value::String(cmd.clone()));
-            }
-            if let Some(args) = &cfg.args {
-                map.insert("args".into(), serde_json::Value::Array(args.iter().map(|a| serde_json::Value::String(a.clone())).collect()));
-            }
-            if let Some(url) = &cfg.url {
-                map.insert("url".into(), serde_json::Value::String(url.clone()));
-            }
-            if let Some(env) = &cfg.env {
-                let env_map: serde_json::Map<String, serde_json::Value> = env.iter().map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone()))).collect();
-                map.insert("env".into(), serde_json::Value::Object(env_map));
+            if is_adapter_format {
+                let mut cmd_parts = vec![];
+                if let Some(cmd) = &cfg.command {
+                    cmd_parts.push(serde_json::Value::String(cmd.clone()));
+                }
+                if let Some(args) = &cfg.args {
+                    cmd_parts.extend(args.iter().map(|a| serde_json::Value::String(a.clone())));
+                }
+                if !cmd_parts.is_empty() {
+                    map.insert("command".into(), serde_json::Value::Array(cmd_parts));
+                    map.insert("type".into(), serde_json::Value::String("local".into()));
+                }
+                if let Some(url) = &cfg.url {
+                    map.insert("url".into(), serde_json::Value::String(url.clone()));
+                    map.insert("type".into(), serde_json::Value::String("remote".into()));
+                }
+                if let Some(env) = &cfg.env {
+                    let env_map: serde_json::Map<String, serde_json::Value> = env.iter().map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone()))).collect();
+                    map.insert("environment".into(), serde_json::Value::Object(env_map));
+                }
+            } else {
+                if let Some(cmd) = &cfg.command {
+                    map.insert("command".into(), serde_json::Value::String(cmd.clone()));
+                }
+                if let Some(args) = &cfg.args {
+                    map.insert("args".into(), serde_json::Value::Array(args.iter().map(|a| serde_json::Value::String(a.clone())).collect()));
+                }
+                if let Some(url) = &cfg.url {
+                    map.insert("url".into(), serde_json::Value::String(url.clone()));
+                }
+                if let Some(env) = &cfg.env {
+                    let env_map: serde_json::Map<String, serde_json::Value> = env.iter().map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone()))).collect();
+                    map.insert("env".into(), serde_json::Value::Object(env_map));
+                }
             }
             (*name, serde_json::Value::Object(map))
         })
@@ -273,14 +296,42 @@ pub fn import_from_adapter(adapter: &McpAdapter, central: &mut McpCentralConfig)
             None => { skipped.push(name.clone()); continue; }
         };
 
-        let config = McpServerConfig {
-            command: obj.get("command").and_then(|v| v.as_str().map(|s| s.to_string())),
-            args: obj.get("args").and_then(|v| v.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())),
-            url: obj.get("url").and_then(|v| v.as_str().map(|s| s.to_string())),
-            env: obj.get("env").and_then(|v| v.as_object().map(|o| o.iter().map(|(k, val)| (k.clone(), val.as_str().unwrap_or("").to_string())).collect())),
-            disabled: None,
-            description: None,
-            targets: vec![adapter.key.to_string()],
+        let config = if adapter.key == "opencode" || adapter.key == "mimocode" {
+            let command_arr = obj.get("command").and_then(|v| v.as_array());
+            let (cmd, args) = if let Some(arr) = command_arr {
+                let cmd = arr.first().and_then(|v| v.as_str().map(|s| s.to_string()));
+                let args = if arr.len() > 1 {
+                    Some(arr[1..].iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+                } else {
+                    None
+                };
+                (cmd, args)
+            } else {
+                (obj.get("command").and_then(|v| v.as_str().map(|s| s.to_string())),
+                 obj.get("args").and_then(|v| v.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())))
+            };
+            let env = obj.get("environment").or_else(|| obj.get("env"))
+                .and_then(|v| v.as_object().map(|o| o.iter().map(|(k, val)| (k.clone(), val.as_str().unwrap_or("").to_string())).collect()));
+            let disabled = obj.get("enabled").and_then(|v| v.as_bool()).map(|b| !b);
+            McpServerConfig {
+                command: cmd,
+                args,
+                url: obj.get("url").and_then(|v| v.as_str().map(|s| s.to_string())),
+                env,
+                disabled,
+                description: None,
+                targets: vec![adapter.key.to_string()],
+            }
+        } else {
+            McpServerConfig {
+                command: obj.get("command").and_then(|v| v.as_str().map(|s| s.to_string())),
+                args: obj.get("args").and_then(|v| v.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())),
+                url: obj.get("url").and_then(|v| v.as_str().map(|s| s.to_string())),
+                env: obj.get("env").and_then(|v| v.as_object().map(|o| o.iter().map(|(k, val)| (k.clone(), val.as_str().unwrap_or("").to_string())).collect())),
+                disabled: None,
+                description: None,
+                targets: vec![adapter.key.to_string()],
+            }
         };
 
         central.servers.insert(name.clone(), config);
