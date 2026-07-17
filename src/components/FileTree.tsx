@@ -27,13 +27,10 @@ export function FileTree({ rootPath, onSelectFile, selectedPath }: FileTreeProps
   const toggleDir = useCallback(
     async (entry: FileEntry) => {
       const newExpanded = new Set(expandedDirs)
-      if (newExpanded.has(entry.path)) {
-        newExpanded.delete(entry.path)
-      } else {
+      if (newExpanded.has(entry.path)) newExpanded.delete(entry.path)
+      else {
         newExpanded.add(entry.path)
-        if (!dirChildren[entry.path]) {
-          await loadDir(entry.path)
-        }
+        if (!dirChildren[entry.path]) await loadDir(entry.path)
       }
       setExpandedDirs(newExpanded)
     },
@@ -41,57 +38,55 @@ export function FileTree({ rootPath, onSelectFile, selectedPath }: FileTreeProps
   )
 
   useEffect(() => {
-    setDirChildren({})
-    setExpandedDirs(new Set())
+    setDirChildren({}); setExpandedDirs(new Set())
     loadDir(rootPath)
   }, [rootPath])
 
   const renderTree = (entries: FileEntry[], depth: number) => {
     const items: React.ReactNode[] = []
-
     const dirs = entries.filter((e) => e.is_dir)
     const files = entries.filter((e) => !e.is_dir)
-
     for (const entry of dirs) {
       const isExpanded = expandedDirs.has(entry.path)
       const children = dirChildren[entry.path] || []
       items.push(
         <div key={entry.path}>
           <div
-            className={`tree-item ${selectedPath === entry.path ? "selected" : ""}`}
+            className={`flex items-center gap-1 px-2 py-1 cursor-pointer text-xs hover:bg-card/60 ${
+              selectedPath === entry.path ? "bg-card/80" : ""
+            }`}
             style={{ paddingLeft: `${depth * 16 + 8}px` }}
             onClick={() => toggleDir(entry)}
           >
-            <span className="tree-icon">{isExpanded ? "\u25BE" : "\u25B8"}</span>
-            <span className="tree-folder-icon">{isExpanded ? "\uD83D\uDCC2" : "\uD83D\uDCC1"}</span>
-            <span className="tree-name">{entry.name}</span>
+            <span className="text-[10px] text-muted-foreground w-3">{isExpanded ? "▼" : "▶"}</span>
+            <span className="text-sm">{isExpanded ? "📂" : "📁"}</span>
+            <span className="truncate">{entry.name}</span>
           </div>
           {isExpanded && renderTree(children, depth + 1)}
         </div>
       )
     }
-
     for (const entry of files) {
       const ext = entry.extension?.toLowerCase() || ""
       const isText = TEXT_EXTENSIONS.has(ext)
       items.push(
-        <div key={entry.path}>
-          <div
-            className={`tree-item tree-file ${selectedPath === entry.path ? "selected" : ""}`}
-            style={{ paddingLeft: `${depth * 16 + 24}px` }}
-            onClick={() => onSelectFile(entry.path)}
-          >
-            <span className="file-icon">{isText ? "\uD83D\uDCC4" : "\uD83D\uDCC1"}</span>
-            <span className="tree-name">{entry.name}</span>
-            {!isText && <span className="file-badge binary">bin</span>}
-          </div>
+        <div
+          key={entry.path}
+          className={`flex items-center gap-1 px-2 py-1 cursor-pointer text-xs hover:bg-card/60 ${
+            selectedPath === entry.path ? "bg-card/80" : ""
+          }`}
+          style={{ paddingLeft: `${depth * 16 + 24}px` }}
+          onClick={() => onSelectFile(entry.path)}
+        >
+          <span className="text-sm">{isText ? "📄" : "📁"}</span>
+          <span className="truncate">{entry.name}</span>
+          {!isText && <span className="px-1 rounded bg-red-500/15 text-red-400 text-[9px] ml-auto">bin</span>}
         </div>
       )
     }
-
     return items
   }
 
   const rootLevel = dirChildren[rootPath] || []
-  return <div className="file-tree">{renderTree(rootLevel, 0)}</div>
+  return <div className="py-1">{renderTree(rootLevel, 0)}</div>
 }

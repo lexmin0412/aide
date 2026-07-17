@@ -30,7 +30,15 @@ function detectLanguage(filename: string) {
 }
 
 function detectExtensions(filename: string, readonly: boolean) {
-  const exts = [basicSetup, indentOnInput(), oneDark]
+  const exts = [
+    basicSetup,
+    indentOnInput(),
+    oneDark,
+    EditorView.theme({
+      "&": { height: "100%" },
+      ".cm-scroller": { overflow: "auto" },
+    }),
+  ]
 
   const lang = detectLanguage(filename)
   if (lang) exts.push(lang)
@@ -115,13 +123,8 @@ export function Editor({ tab, onChange, onSave }: EditorProps) {
   }, [tab.content])
 
   return (
-    <div className="editor-container">
-      <div className="editor-tab">
-        <span className="editor-tab-name">{tab.name}</span>
-        {tab.is_dirty && <span className="editor-tab-dirty">*</span>}
-        <span className="editor-tab-path">{tab.path}</span>
-      </div>
-      <div className="editor-content" ref={editorRef} />
+    <div className="editor-container h-full flex flex-col">
+      <div className="editor-content flex-1 min-h-0" ref={editorRef} />
     </div>
   )
 }

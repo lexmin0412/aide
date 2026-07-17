@@ -489,6 +489,23 @@ fn save_mcp_servers(servers: Vec<McpServerView>) -> Result<(), String> {
 }
 
 #[derive(Serialize)]
+pub struct McpToolView {
+    pub key: String,
+    pub name: String,
+}
+
+#[tauri::command]
+fn list_mcp_tools() -> Vec<McpToolView> {
+    mcp::all_mcp_adapters()
+        .into_iter()
+        .map(|a| McpToolView {
+            key: a.key.to_string(),
+            name: a.name.to_string(),
+        })
+        .collect()
+}
+
+#[derive(Serialize)]
 pub struct McpSyncResult {
     pub key: String,
     pub name: String,
@@ -585,6 +602,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             list_tools,
+            list_mcp_tools,
             list_mcp_servers,
             save_mcp_servers,
             sync_mcp_tool,
