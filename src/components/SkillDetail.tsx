@@ -1,8 +1,15 @@
 import { useState, useCallback, useEffect, useRef } from "react"
 import { invoke } from "@tauri-apps/api/core"
-import { RefreshCw } from "lucide-react"
+import { RefreshCw, Trash2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog"
 import { FileTree } from "./FileTree"
 import type { FileTreeHandle } from "./FileTree"
 import { Editor } from "./Editor"
@@ -12,11 +19,13 @@ import type { SkillInfo, EditorTab } from "../types"
 interface SkillDetailProps {
   skill: SkillInfo
   onBack: () => void
+  onDelete: (path: string) => Promise<void>
 }
 
-export default function SkillDetail({ skill, onBack }: SkillDetailProps) {
+export default function SkillDetail({ skill, onBack, onDelete }: SkillDetailProps) {
   const [tabs, setTabs] = useState<EditorTab[]>([])
   const [activeTabPath, setActiveTabPath] = useState<string | null>(null)
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const rootPath = skill.is_symlink && skill.target_path ? skill.target_path : skill.path
   const treeRef = useRef<FileTreeHandle>(null)
 
@@ -169,15 +178,21 @@ export default function SkillDetail({ skill, onBack }: SkillDetailProps) {
     <div className="h-full flex flex-col">
       <div className="flex items-center gap-3 px-5 py-2.5 border-b border-border bg-card/40">
         <Button variant="ghost" size="sm" onClick={onBack}>← Back</Button>
-        <div className="flex flex-col min-w-0">
+        <div className="flex flex-col min-w-0 flex-1">
           <div className="text-sm font-medium truncate">
             {skill.is_symlink && "🔗 "}{skill.display_name}
           </div>
-          <div className="text-[10px] text-muted-foreground font-mono truncate">{skill.path}</div>
+          <div className="text-[10px] text-muted-foreground font-mono truncate">
+            {skill.is_symlink && skill.target_path ? (
+              <>{skill.target_path} → {skill.path}</>
+            ) : (
+              skill.path
+            )}
+          </div>
         </div>
-        {skill.is_symlink && skill.target_path && (
-          <Badge variant="outline" className="font-mono text-[10px] ml-auto">→ {skill.target_path}</Badge>
-        )}
+        <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-destructive" onClick={() => setShowDeleteDialog(true)}>
+          <Trash2 size={14} />
+        </Button>
       </div>
       <div className="flex-1 flex overflow-hidden">
         <div className="w-64 bg-card/40 border-r border-border overflow-y-auto shrink-0">
@@ -222,6 +237,22 @@ export default function SkillDetail({ skill, onBack }: SkillDetailProps) {
           </div>
         </div>
       </div>
+
+      <Dialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Skill</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete <span className="font-mono text-foreground">{skill.display_name}</span>?
+              {skill.is_symlink ? " This will remove the symlink." : " This will delete all files in the skill directory."}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setShowDeleteDialog(false)}>Cancel</Button>
+            <Button variant="destructive" size="sm" onClick={() => onDelete(skill.path)}>Delete</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

@@ -1,4 +1,5 @@
-import { useState } from "react"
+import { useState, useCallback } from "react"
+import { invoke } from "@tauri-apps/api/core"
 import SkillGrid from "./components/SkillGrid"
 import SkillDetail from "./components/SkillDetail"
 import { ConfigPanel } from "./components/ConfigPanel"
@@ -11,12 +12,19 @@ type Page = "skills" | "mcp" | "configs"
 export default function App() {
   const [page, setPage] = useState<Page>("skills")
   const [selectedSkill, setSelectedSkill] = useState<SkillInfo | null>(null)
+  const [gridKey, setGridKey] = useState(0)
 
   const tabs: { key: Page; label: string }[] = [
     { key: "skills", label: "Skills" },
     { key: "mcp", label: "MCP" },
     { key: "configs", label: "Configs" },
   ]
+
+  const handleSkillDeleted = useCallback(async (path: string) => {
+    await invoke("delete_entry", { path })
+    setSelectedSkill(null)
+    setGridKey((k) => k + 1)
+  }, [])
 
   return (
     <div className="h-full flex flex-col bg-background text-foreground">
@@ -41,9 +49,9 @@ export default function App() {
       <div className="flex-1 relative overflow-hidden">
         <div className={`absolute inset-0 ${page === "skills" ? "" : "hidden"}`}>
           {selectedSkill ? (
-            <SkillDetail skill={selectedSkill} onBack={() => setSelectedSkill(null)} />
+            <SkillDetail skill={selectedSkill} onBack={() => setSelectedSkill(null)} onDelete={handleSkillDeleted} />
           ) : (
-            <SkillGrid onSelectSkill={setSelectedSkill} />
+            <SkillGrid key={gridKey} onSelectSkill={setSelectedSkill} />
           )}
         </div>
         <div className={`absolute inset-0 ${page === "mcp" ? "" : "hidden"}`}>
