@@ -31,6 +31,10 @@ const TEXT_EXTENSIONS = new Set([
   "sh", "bash", "env",
 ])
 
+const IMAGE_EXTENSIONS = new Set([
+  "png", "jpg", "jpeg", "gif", "webp", "svg", "ico", "bmp",
+])
+
 interface ContextMenuState {
   x: number
   y: number
@@ -264,6 +268,7 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
       const isEditingRename = editing?.type === "rename" && editing.originalPath === entry.path
       const ext = entry.extension?.toLowerCase() || ""
       const isText = TEXT_EXTENSIONS.has(ext)
+      const isImage = IMAGE_EXTENSIONS.has(ext)
       items.push(
         <div
           key={entry.path}
@@ -274,7 +279,7 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
           onClick={() => onSelectFile(entry.path)}
           onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setContextMenu({ x: e.clientX, y: e.clientY, entry }) }}
         >
-          {isText ? <FileText size={14} className="text-muted-foreground shrink-0" /> : <FileText size={14} className="text-muted-foreground/50 shrink-0" />}
+          {isImage ? <span className="text-sm shrink-0">{'\u{1F5BC}'}</span> : isText ? <FileText size={14} className="text-muted-foreground shrink-0" /> : <FileText size={14} className="text-muted-foreground/50 shrink-0" />}
           {isEditingRename ? (
             <Input
               ref={editInputRef}
@@ -291,7 +296,7 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
           ) : (
             <span className="truncate">{entry.name}</span>
           )}
-          {!isText && !isEditingRename && <span className="px-1 rounded bg-red-500/15 text-red-400 text-[9px] ml-auto">bin</span>}
+          {!isText && !isImage && !isEditingRename && <span className="px-1 rounded bg-red-500/15 text-red-400 text-[9px] ml-auto">bin</span>}
         </div>
       )
     }

@@ -55,7 +55,15 @@ function detectExtensions(filename: string, readonly: boolean) {
   return exts
 }
 
-export function Editor({ tab, onChange, onSave }: EditorProps) {
+function ImageViewer({ tab }: { tab: EditorTab }) {
+  return (
+    <div className="h-full flex items-center justify-center p-4 overflow-auto">
+      <img src={tab.content} alt={tab.name} className="max-w-full max-h-full object-contain rounded" />
+    </div>
+  )
+}
+
+function TextViewer({ tab, onChange, onSave }: EditorProps) {
   const editorRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
   const onChangeRef = useRef(onChange)
@@ -127,4 +135,9 @@ export function Editor({ tab, onChange, onSave }: EditorProps) {
       <div className="editor-content flex-1 min-h-0" ref={editorRef} />
     </div>
   )
+}
+
+export function Editor({ tab, onChange, onSave }: EditorProps) {
+  if (tab.is_image) return <ImageViewer tab={tab} />
+  return <TextViewer tab={tab} onChange={onChange} onSave={onSave} />
 }

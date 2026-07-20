@@ -13,6 +13,7 @@ export interface EditorTab {
   content: string
   is_dirty: boolean
   language: string
+  is_image?: boolean
 }
 
 export interface SkillInfo {

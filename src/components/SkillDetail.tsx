@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge"
 import { FileTree } from "./FileTree"
 import type { FileTreeHandle } from "./FileTree"
 import { Editor } from "./Editor"
+import { readFileAsTab } from "@/lib/fileUtils"
 import type { SkillInfo, EditorTab } from "../types"
 
 interface SkillDetailProps {
@@ -38,18 +39,17 @@ export default function SkillDetail({ skill, onBack }: SkillDetailProps) {
       const existing = tabs.find((t) => t.path === filePath)
       if (existing) {
         setActiveTabPath(filePath)
-        if (!existing.is_dirty) {
+        if (!existing.is_dirty && !existing.is_image) {
           try {
-            const content = await invoke<string>("read_text_file", { path: filePath })
-            setTabs((prev) => prev.map((t) => (t.path === filePath ? { ...t, content } : t)))
+            const tab = await readFileAsTab(filePath)
+            setTabs((prev) => prev.map((t) => (t.path === filePath ? { ...t, content: tab.content } : t)))
           } catch {}
         }
         return
       }
-      const name = filePath.split("/").pop() || filePath
       try {
-        const content = await invoke<string>("read_text_file", { path: filePath })
-        setTabs((prev) => [...prev, { path: filePath, name, content, is_dirty: false, language: "plain" }])
+        const tab = await readFileAsTab(filePath)
+        setTabs((prev) => [...prev, tab])
         setActiveTabPath(filePath)
       } catch (e) { console.error("Failed to read file:", e) }
     },
@@ -89,10 +89,10 @@ export default function SkillDetail({ skill, onBack }: SkillDetailProps) {
     async (path: string) => {
       setActiveTabPath(path)
       const tab = tabs.find((t) => t.path === path)
-      if (tab && !tab.is_dirty) {
+      if (tab && !tab.is_dirty && !tab.is_image) {
         try {
-          const content = await invoke<string>("read_text_file", { path })
-          setTabs((prev) => prev.map((t) => (t.path === path ? { ...t, content } : t)))
+          const updated = await readFileAsTab(path)
+          setTabs((prev) => prev.map((t) => (t.path === path ? { ...t, content: updated.content } : t)))
         } catch {}
       }
     },
@@ -101,10 +101,10 @@ export default function SkillDetail({ skill, onBack }: SkillDetailProps) {
 
   const refreshAllTabs = useCallback(async () => {
     for (const tab of tabs) {
-      if (!tab.is_dirty) {
+      if (!tab.is_dirty && !tab.is_image) {
         try {
-          const content = await invoke<string>("read_text_file", { path: tab.path })
-          setTabs((prev) => prev.map((t) => (t.path === tab.path ? { ...t, content } : t)))
+          const updated = await readFileAsTab(tab.path)
+          setTabs((prev) => prev.map((t) => (t.path === tab.path ? { ...t, content: updated.content } : t)))
         } catch {}
       }
     }

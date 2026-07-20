@@ -2,6 +2,7 @@ use std::path::Path;
 use std::time::SystemTime;
 use std::{fs, io};
 
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 
 mod adapter;
@@ -175,6 +176,28 @@ fn list_directory(path: String) -> Result<Vec<FileEntry>, String> {
 #[tauri::command]
 fn read_text_file(path: String) -> Result<String, String> {
     fs::read_to_string(&path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn read_binary_base64(path: String) -> Result<String, String> {
+    let ext = Path::new(&path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    let mime = match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "ico" => "image/x-icon",
+        "bmp" => "image/bmp",
+        _ => "application/octet-stream",
+    };
+    let bytes = fs::read(&path).map_err(|e| e.to_string())?;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Ok(format!("data:{};base64,{}", mime, encoded))
 }
 
 #[tauri::command]
@@ -614,6 +637,7 @@ pub fn run() {
             list_skills,
             list_directory,
             read_text_file,
+            read_binary_base64,
             write_text_file,
             create_file,
             create_directory,
