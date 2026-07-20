@@ -2,14 +2,17 @@
 
 AI Development Environment config manager.
 
-A unified hub for managing cross-agent AI configurations — Skills, MCP, and model configs — with multi-agent compatibility (Claude Code, OpenCode, Cursor, Zed, etc.).
+A unified hub for managing cross-agent AI configurations — Skills, MCP, and model configs — with multi-agent compatibility (Claude Code, OpenCode, Cursor, Codex, Warp, GitHub Copilot, Trae, VS Code, MiMo Code).
 
 ## Features
 
-- **File Explorer**: Directory tree + file list with natural sorting
-- **Code Editor**: CodeMirror 6 with JSON Schema validation, Markdown support, dark theme
-- **Multi-Tab**: Open multiple files, Cmd+S to save, dirty indicators
-- **Extensible**: Designed for Skills sync, MCP config translation, model config abstraction
+- **Skills Management**: Install, browse, edit, and sync AI agent skills across 8 tools via symlink
+- **MCP Server Management**: Centralized MCP config with import/sync to tool-specific formats
+- **Config Browser**: View and edit raw config files for each supported AI tool
+- **Code Editor**: CodeMirror 6 with JSON linting, Markdown support, dark theme
+- **Image Viewer**: Preview png/jpg/gif/webp/svg/bmp files inline
+- **File Tree**: Directory browser with right-click context menu (Rename, Delete, New File/Folder)
+- **Multi-Tab**: Open multiple files, Cmd+W to close tab, Cmd+S to save, dirty indicators
 
 ## Tech Stack
 
@@ -17,6 +20,7 @@ A unified hub for managing cross-agent AI configurations — Skills, MCP, and mo
 |---|---|
 | Desktop | Tauri v2 |
 | Frontend | React 19 + TypeScript 6 + Vite 8 |
+| Styling | Tailwind CSS 4 + shadcn/ui |
 | Editor | CodeMirror 6 |
 | Backend | Rust (`std::fs` CRUD) |
 | Package | pnpm 11 |
@@ -32,6 +36,7 @@ pnpm tauri dev
 ```bash
 src/               # React frontend
 src-tauri/         # Rust backend + Tauri config
-├── src/lib.rs     # File CRUD commands
-└── src/main.rs    # Entry point
+├── src/lib.rs     # 21 Tauri commands
+├── src/adapter/   # Tool adapter definitions
+└── src/mcp.rs     # MCP config management
 ```
