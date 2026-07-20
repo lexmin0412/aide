@@ -296,7 +296,6 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
           ) : (
             <span className="truncate">{entry.name}</span>
           )}
-          {!isText && !isImage && !isEditingRename && <span className="px-1 rounded bg-red-500/15 text-red-400 text-[9px] ml-auto">bin</span>}
         </div>
       )
     }
