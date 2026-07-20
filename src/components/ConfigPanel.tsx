@@ -50,8 +50,8 @@ export function ConfigPanel() {
   )
 
   const closeTab = useCallback(
-    (path: string, e: React.MouseEvent) => {
-      e.stopPropagation()
+    (path: string, e?: React.MouseEvent) => {
+      e?.stopPropagation()
       const idx = tabs.findIndex((t) => t.path === path)
       setTabs((prev) => prev.filter((t) => t.path !== path))
       if (activeTabPath === path) {
@@ -61,6 +61,18 @@ export function ConfigPanel() {
     },
     [tabs, activeTabPath]
   )
+
+  useEffect(() => {
+    if (tabs.length === 0) return
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "w") {
+        e.preventDefault()
+        if (activeTabPath) closeTab(activeTabPath)
+      }
+    }
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [tabs.length, activeTabPath, closeTab])
 
   const handleEditorChange = useCallback((path: string, content: string) => {
     setTabs((prev) => prev.map((t) => (t.path === path ? { ...t, content, is_dirty: true } : t)))
