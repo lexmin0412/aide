@@ -56,6 +56,8 @@ pub struct McpServerConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub env: Option<HashMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub headers: Option<HashMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub disabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -137,6 +139,10 @@ pub fn sync_to_tool(adapter: &McpAdapter, central: &McpCentralConfig) -> Result<
                     let env_map: serde_json::Map<String, serde_json::Value> = env.iter().map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone()))).collect();
                     map.insert("environment".into(), serde_json::Value::Object(env_map));
                 }
+                if let Some(headers) = &cfg.headers {
+                    let headers_map: serde_json::Map<String, serde_json::Value> = headers.iter().map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone()))).collect();
+                    map.insert("headers".into(), serde_json::Value::Object(headers_map));
+                }
             } else {
                 if let Some(cmd) = &cfg.command {
                     map.insert("command".into(), serde_json::Value::String(cmd.clone()));
@@ -150,6 +156,10 @@ pub fn sync_to_tool(adapter: &McpAdapter, central: &McpCentralConfig) -> Result<
                 if let Some(env) = &cfg.env {
                     let env_map: serde_json::Map<String, serde_json::Value> = env.iter().map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone()))).collect();
                     map.insert("env".into(), serde_json::Value::Object(env_map));
+                }
+                if let Some(headers) = &cfg.headers {
+                    let headers_map: serde_json::Map<String, serde_json::Value> = headers.iter().map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone()))).collect();
+                    map.insert("headers".into(), serde_json::Value::Object(headers_map));
                 }
             }
             (*name, serde_json::Value::Object(map))
@@ -312,22 +322,28 @@ pub fn import_from_adapter(adapter: &McpAdapter, central: &mut McpCentralConfig)
             };
             let env = obj.get("environment").or_else(|| obj.get("env"))
                 .and_then(|v| v.as_object().map(|o| o.iter().map(|(k, val)| (k.clone(), val.as_str().unwrap_or("").to_string())).collect()));
+            let headers = obj.get("headers")
+                .and_then(|v| v.as_object().map(|o| o.iter().map(|(k, val)| (k.clone(), val.as_str().unwrap_or("").to_string())).collect()));
             let disabled = obj.get("enabled").and_then(|v| v.as_bool()).map(|b| !b);
             McpServerConfig {
                 command: cmd,
                 args,
                 url: obj.get("url").and_then(|v| v.as_str().map(|s| s.to_string())),
                 env,
+                headers,
                 disabled,
                 description: None,
                 targets: vec![adapter.key.to_string()],
             }
         } else {
+            let headers = obj.get("headers")
+                .and_then(|v| v.as_object().map(|o| o.iter().map(|(k, val)| (k.clone(), val.as_str().unwrap_or("").to_string())).collect()));
             McpServerConfig {
                 command: obj.get("command").and_then(|v| v.as_str().map(|s| s.to_string())),
                 args: obj.get("args").and_then(|v| v.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())),
                 url: obj.get("url").and_then(|v| v.as_str().map(|s| s.to_string())),
                 env: obj.get("env").and_then(|v| v.as_object().map(|o| o.iter().map(|(k, val)| (k.clone(), val.as_str().unwrap_or("").to_string())).collect())),
+                headers,
                 disabled: None,
                 description: None,
                 targets: vec![adapter.key.to_string()],

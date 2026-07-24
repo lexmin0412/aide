@@ -29,6 +29,7 @@ interface McpServer {
   args: string[] | null;
   url: string | null;
   env: Record<string, string> | null;
+  headers: Record<string, string> | null;
   disabled: boolean | null;
   description: string | null;
   targets: string[];
@@ -205,7 +206,7 @@ export default function MCPPage() {
                       {s.name}
                     </span>
                     <Badge variant="secondary" className="text-[10px] shrink-0">
-                      {s.url ? "SSE" : "STDIO"}
+                      {s.url ? (s.headers ? "HTTP" : "SSE") : "STDIO"}
                     </Badge>
                   </div>
                   <div className="flex gap-1 shrink-0">
@@ -407,7 +408,7 @@ function ServerForm({
   onReady: (fn: () => void) => void;
 }) {
   const [name, setName] = useState(server?.name || "");
-  const [type, setType] = useState(server?.url ? "sse" : "stdio");
+  const [type, setType] = useState(server?.url ? (server?.headers ? "streamable_http" : "sse") : "stdio");
   const [command, setCommand] = useState(server?.command || "");
   const [args, setArgs] = useState(server?.args?.join(" ") || "");
   const [url, setUrl] = useState(server?.url || "");
@@ -416,16 +417,20 @@ function ServerForm({
   const [envEntries, setEnvEntries] = useState<[string, string][]>(
     Object.entries(server?.env || {})
   );
+  const [headersEntries, setHeadersEntries] = useState<[string, string][]>(
+    Object.entries(server?.headers || {})
+  );
 
   useEffect(() => {
     setName(server?.name || "");
-    setType(server?.url ? "sse" : "stdio");
+    setType(server?.url ? (server?.headers ? "streamable_http" : "sse") : "stdio");
     setCommand(server?.command || "");
     setArgs(server?.args?.join(" ") || "");
     setUrl(server?.url || "");
     setDesc(server?.description || "");
     setTargets(server?.targets || []);
     setEnvEntries(Object.entries(server?.env || {}));
+    setHeadersEntries(Object.entries(server?.headers || {}));
   }, [server]);
 
   const submit = () => {
@@ -435,10 +440,14 @@ function ServerForm({
       name: name.trim(),
       command: type === "stdio" ? command.trim() || null : null,
       args: type === "stdio" && args.trim() ? args.trim().split(/\s+/) : null,
-      url: type === "sse" ? url.trim() || null : null,
+      url: type !== "stdio" ? url.trim() || null : null,
       env:
         envEntries.length > 0
           ? Object.fromEntries(envEntries.filter(([k]) => k.trim()))
+          : null,
+      headers:
+        type === "streamable_http" && headersEntries.length > 0
+          ? Object.fromEntries(headersEntries.filter(([k]) => k.trim()))
           : null,
       disabled: false,
       description: desc.trim() || null,
@@ -468,11 +477,14 @@ function ServerForm({
           <Label>Type</Label>
           <Select value={type} onValueChange={(v) => v && setType(v)}>
             <SelectTrigger className="w-full">
-              <SelectValue />
+              <SelectValue>
+                {type === "stdio" ? "STDIO" : type === "sse" ? "SSE" : "Streamable HTTP"}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="stdio">STDIO</SelectItem>
               <SelectItem value="sse">SSE</SelectItem>
+              <SelectItem value="streamable_http">Streamable HTTP</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -505,14 +517,65 @@ function ServerForm({
           </div>
         </>
       ) : (
-        <div className="space-y-1">
-          <Label>URL</Label>
-          <Input
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder="https://"
-          />
-        </div>
+        <>
+          <div className="space-y-1">
+            <Label>URL</Label>
+            <Input
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="https://"
+            />
+          </div>
+          {type === "streamable_http" && (
+            <div className="space-y-1">
+              <Label>Headers</Label>
+              <div className="space-y-1.5">
+                {headersEntries.map(([k, v], i) => (
+                  <div key={i} className="flex gap-1.5 items-center">
+                    <Input
+                      className="flex-1 font-mono text-xs"
+                      value={k}
+                      onChange={(e) => {
+                        const n = [...headersEntries];
+                        n[i] = [e.target.value, v];
+                        setHeadersEntries(n);
+                      }}
+                      placeholder="Header-Name"
+                    />
+                    <Input
+                      className="flex-1 font-mono text-xs"
+                      value={v}
+                      onChange={(e) => {
+                        const n = [...headersEntries];
+                        n[i] = [k, e.target.value];
+                        setHeadersEntries(n);
+                      }}
+                      placeholder="value"
+                    />
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-9 w-9 shrink-0"
+                      onClick={() =>
+                        setHeadersEntries(headersEntries.filter((_, j) => j !== i))
+                      }
+                    >
+                      <XIcon className="size-3" />
+                    </Button>
+                  </div>
+                ))}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full"
+                  onClick={() => setHeadersEntries([...headersEntries, ["", ""]])}
+                >
+                  + Add header
+                </Button>
+              </div>
+            </div>
+          )}
+        </>
       )}
       <div className="space-y-1">
         <Label>Targets</Label>
@@ -537,8 +600,9 @@ function ServerForm({
           ))}
         </div>
       </div>
-      <div className="space-y-1">
-        <Label>Environment</Label>
+      {type === "stdio" && (
+        <div className="space-y-1">
+          <Label>Environment</Label>
         <div className="space-y-1.5">
           {envEntries.map(([k, v], i) => (
             <div key={i} className="flex gap-1.5 items-center">
@@ -584,6 +648,7 @@ function ServerForm({
           </Button>
         </div>
       </div>
+      )}
     </div>
   );
 }
@@ -635,6 +700,7 @@ function ImportJson({
           args,
           url: cfg.url || null,
           env: cfg.env || cfg.environment || null,
+          headers: cfg.headers || null,
           disabled: cfg.disabled ?? (cfg.enabled === false ? true : false),
           description: null,
           targets: [],
