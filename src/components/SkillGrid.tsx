@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { SkillCard } from "./SkillCard"
 import { SyncPanel } from "./SyncPanel"
+import { useSkillStore } from "../stores/skillStore"
 import type { SkillInfo } from "../types"
 
 interface SkillGridProps {
@@ -14,7 +15,7 @@ export default function SkillGrid({ onSelectSkill }: SkillGridProps) {
   const [skills, setSkills] = useState<SkillInfo[]>([])
   const [loading, setLoading] = useState(true)
   const [syncOpen, setSyncOpen] = useState(false)
-  const [query, setQuery] = useState("")
+  const { searchQuery, setSearchQuery } = useSkillStore()
 
   useEffect(() => {
     invoke<SkillInfo[]>("list_skills")
@@ -24,12 +25,12 @@ export default function SkillGrid({ onSelectSkill }: SkillGridProps) {
   }, [])
 
   const filtered = useMemo(() => {
-    if (!query.trim()) return skills
-    const q = query.toLowerCase()
+    if (!searchQuery.trim()) return skills
+    const q = searchQuery.toLowerCase()
     return skills.filter(
       (s) => s.display_name.toLowerCase().includes(q) || s.description?.toLowerCase().includes(q)
     )
-  }, [skills, query])
+  }, [skills, searchQuery])
 
   if (loading) {
     return <div className="h-full flex items-center justify-center text-sm text-muted-foreground">Loading...</div>
@@ -44,8 +45,8 @@ export default function SkillGrid({ onSelectSkill }: SkillGridProps) {
         </div>
         <Input
           placeholder="Search skills..."
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
           className="max-w-[260px] h-8 text-xs"
         />
         <Button variant="outline" size="sm" onClick={() => setSyncOpen(true)}>Sync</Button>
@@ -56,8 +57,8 @@ export default function SkillGrid({ onSelectSkill }: SkillGridProps) {
             <SkillCard key={skill.name} skill={skill} onClick={onSelectSkill} />
           ))}
         </div>
-        {query && filtered.length === 0 && (
-          <div className="text-sm text-muted-foreground text-center mt-12">No skills match "{query}"</div>
+        {searchQuery && filtered.length === 0 && (
+          <div className="text-sm text-muted-foreground text-center mt-12">No skills match "{searchQuery}"</div>
         )}
       </div>
       <SyncPanel open={syncOpen} onClose={() => setSyncOpen(false)} />
