@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react"
+import { useState, useEffect, useMemo, useRef } from "react"
 import { invoke } from "@tauri-apps/api/core"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -15,7 +15,10 @@ export default function SkillGrid({ onSelectSkill }: SkillGridProps) {
   const [skills, setSkills] = useState<SkillInfo[]>([])
   const [loading, setLoading] = useState(true)
   const [syncOpen, setSyncOpen] = useState(false)
-  const { searchQuery, setSearchQuery } = useSkillStore()
+  const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set())
+  const { searchQuery, setSearchQuery, scrollPosition, setScrollPosition } = useSkillStore()
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const restoredRef = useRef(false)
 
   useEffect(() => {
     invoke<SkillInfo[]>("list_skills")
@@ -24,13 +27,63 @@ export default function SkillGrid({ onSelectSkill }: SkillGridProps) {
       .finally(() => setLoading(false))
   }, [])
 
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const onScroll = () => setScrollPosition(el.scrollTop)
+    el.addEventListener("scroll", onScroll, { passive: true })
+    return () => el.removeEventListener("scroll", onScroll)
+  }, [setScrollPosition])
+
+  useEffect(() => {
+    if (loading || restoredRef.current) return
+    restoredRef.current = true
+    if (scrollPosition > 0) {
+      const el = scrollRef.current
+      if (!el) return
+      let attempts = 0
+      const tryScroll = () => {
+        if (el.scrollHeight > el.clientHeight) {
+          el.scrollTo(0, scrollPosition)
+        } else if (attempts < 15) {
+          attempts++
+          requestAnimationFrame(tryScroll)
+        }
+      }
+      requestAnimationFrame(tryScroll)
+    }
+  }, [loading, scrollPosition])
+
+  const allTags = useMemo(() => {
+    const tags = new Set<string>()
+    for (const s of skills) {
+      for (const t of s.tags) tags.add(t)
+    }
+    return Array.from(tags).sort()
+  }, [skills])
+
+  const toggleTag = (tag: string) => {
+    setSelectedTags((prev) => {
+      const next = new Set(prev)
+      if (next.has(tag)) next.delete(tag)
+      else next.add(tag)
+      return next
+    })
+  }
+
   const filtered = useMemo(() => {
-    if (!searchQuery.trim()) return skills
-    const q = searchQuery.toLowerCase()
-    return skills.filter(
-      (s) => s.display_name.toLowerCase().includes(q) || s.description?.toLowerCase().includes(q)
-    )
-  }, [skills, searchQuery])
+    let result = skills
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase()
+      result = result.filter(
+        (s) => s.display_name.toLowerCase().includes(q) || s.description?.toLowerCase().includes(q)
+      )
+    }
+    if (selectedTags.size > 0) {
+      result = result.filter((s) => s.tags.some((t) => selectedTags.has(t)))
+    }
+    return result
+  }, [skills, searchQuery, selectedTags])
 
   if (loading) {
     return <div className="h-full flex items-center justify-center text-sm text-muted-foreground">Loading...</div>
@@ -51,10 +104,46 @@ export default function SkillGrid({ onSelectSkill }: SkillGridProps) {
         />
         <Button variant="outline" size="sm" onClick={() => setSyncOpen(true)}>Sync</Button>
       </div>
-      <div className="flex-1 overflow-y-auto px-6 pb-6">
+      {allTags.length > 0 && (
+        <div className="flex items-center gap-1.5 px-6 pb-3 shrink-0 flex-wrap">
+          {allTags.map((tag) => {
+            const active = selectedTags.has(tag)
+            return (
+              <button
+                key={tag}
+                onClick={() => toggleTag(tag)}
+                className={`px-2 py-0.5 rounded-full text-[11px] border transition-colors ${
+                  active
+                    ? "bg-foreground text-background border-foreground"
+                    : "bg-transparent text-muted-foreground border-border hover:border-foreground/30 hover:text-foreground"
+                }`}
+              >
+                {tag}
+              </button>
+            )
+          })}
+          {selectedTags.size > 0 && (
+            <button
+              onClick={() => setSelectedTags(new Set())}
+              className="px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+      )}
+      <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 pb-6">
         <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3">
           {filtered.map((skill) => (
-            <SkillCard key={skill.name} skill={skill} onClick={onSelectSkill} />
+            <SkillCard
+              key={skill.name}
+              skill={skill}
+              allTags={allTags}
+              onClick={onSelectSkill}
+              onTagsChanged={(skillPath, tags) => {
+                setSkills((prev) => prev.map((s) => s.path === skillPath ? { ...s, tags } : s))
+              }}
+            />
           ))}
         </div>
         {searchQuery && filtered.length === 0 && (

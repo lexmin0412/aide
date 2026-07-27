@@ -23,6 +23,7 @@ pub struct SkillInfo {
     pub name: String,
     pub display_name: String,
     pub description: String,
+    pub tags: Vec<String>,
     pub path: String,
     pub is_symlink: bool,
     pub target_path: Option<String>,
@@ -73,10 +74,26 @@ fn count_files(path: &Path) -> usize {
     count
 }
 
-fn parse_skill_frontmatter(content: &str) -> (Option<String>, Option<String>) {
+fn extract_tags(value: &serde_yaml::Value) -> Vec<String> {
+    match value {
+        serde_yaml::Value::Sequence(arr) => {
+            arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
+        }
+        serde_yaml::Value::String(s) => {
+            s.split(|c: char| c == ' ' || c == ',' || c == '，')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn parse_skill_frontmatter(content: &str) -> (Option<String>, Option<String>, Vec<String>) {
     let content = content.trim();
     if !content.starts_with("---") {
-        return (None, None);
+        return (None, None, Vec::new());
     }
     let rest = content[3..].trim();
     if let Some(end) = rest.find("---") {
@@ -84,7 +101,7 @@ fn parse_skill_frontmatter(content: &str) -> (Option<String>, Option<String>) {
         if let Ok(val) = serde_yaml::from_str::<serde_yaml::Value>(yaml_str) {
             let mapping = match &val {
                 serde_yaml::Value::Mapping(m) => m,
-                _ => return (None, None),
+                _ => return (None, None, Vec::new()),
             };
             let name = mapping
                 .get(&serde_yaml::Value::String("name".into()))
@@ -94,10 +111,22 @@ fn parse_skill_frontmatter(content: &str) -> (Option<String>, Option<String>) {
                 .get(&serde_yaml::Value::String("description".into()))
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
-            return (name, desc);
+            let tags = mapping
+                .get(&serde_yaml::Value::String("tags".into()))
+                .map(extract_tags)
+                .filter(|t| !t.is_empty())
+                .or_else(|| {
+                    mapping
+                        .get(&serde_yaml::Value::String("metadata".into()))
+                        .and_then(|v| v.as_mapping())
+                        .and_then(|m| m.get(&serde_yaml::Value::String("tags".into())))
+                        .map(extract_tags)
+                })
+                .unwrap_or_default();
+            return (name, desc, tags);
         }
     }
-    (None, None)
+    (None, None, Vec::new())
 }
 
 #[tauri::command]
@@ -128,17 +157,17 @@ fn list_skills() -> Result<Vec<SkillInfo>, String> {
             None
         };
 
-        let (display_name, description) = {
+        let (display_name, description, tags) = {
             let skill_md = path.join("SKILL.md");
             if skill_md.exists() {
                 if let Ok(content) = fs::read_to_string(&skill_md) {
-                    let (n, d) = parse_skill_frontmatter(&content);
-                    (n.unwrap_or_else(|| name.clone()), d.unwrap_or_default())
+                    let (n, d, t) = parse_skill_frontmatter(&content);
+                    (n.unwrap_or_else(|| name.clone()), d.unwrap_or_default(), t)
                 } else {
-                    (name.clone(), String::new())
+                    (name.clone(), String::new(), Vec::new())
                 }
             } else {
-                (name.clone(), String::new())
+                (name.clone(), String::new(), Vec::new())
             }
         };
 
@@ -153,6 +182,7 @@ fn list_skills() -> Result<Vec<SkillInfo>, String> {
             name: name.clone(),
             display_name,
             description,
+            tags,
             path: path.to_string_lossy().to_string(),
             is_symlink,
             target_path,
@@ -235,6 +265,63 @@ fn delete_entry(path: String) -> Result<(), String> {
 #[tauri::command]
 fn rename_entry(old_path: String, new_path: String) -> Result<(), String> {
     fs::rename(&old_path, &new_path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn update_skill_tags(path: String, tags: Vec<String>) -> Result<(), String> {
+    let skill_md = Path::new(&path).join("SKILL.md");
+    let content = fs::read_to_string(&skill_md).map_err(|e| e.to_string())?;
+    let content = content.trim();
+
+    let tags_line = if tags.is_empty() {
+        String::new()
+    } else {
+        let joined = tags
+            .iter()
+            .map(|t| format!("\"{}\"", t))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("tags: [{}]", joined)
+    };
+
+    let new_content = if content.starts_with("---") {
+        let rest = &content[3..];
+        if let Some(end) = rest.find("---") {
+            let front = &rest[..end];
+            let body_start = end + 3;
+            let body = &rest[body_start..];
+
+            let lines: Vec<&str> = front.lines().collect();
+            let mut out_lines: Vec<String> = Vec::new();
+            let mut tags_written = false;
+
+            for line in &lines {
+                let trimmed = line.trim();
+                if trimmed.starts_with("tags:") && !tags_written {
+                    if !tags_line.is_empty() {
+                        out_lines.push(tags_line.clone());
+                    }
+                    tags_written = true;
+                } else {
+                    out_lines.push(line.to_string());
+                }
+            }
+
+            if !tags_written && !tags_line.is_empty() {
+                out_lines.push(tags_line);
+            }
+
+            format!("---\n{}\n---{}", out_lines.join("\n"), body)
+        } else {
+            return Err("Invalid frontmatter: no closing ---".to_string());
+        }
+    } else if !tags_line.is_empty() {
+        format!("---\n{}\n---\n{}", tags_line, content)
+    } else {
+        return Ok(());
+    };
+
+    fs::write(&skill_md, &new_content).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -648,6 +735,7 @@ pub fn run() {
             rename_entry,
             file_exists,
             get_home_dir,
+            update_skill_tags,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -20,6 +20,7 @@ export interface SkillInfo {
   name: string
   display_name: string
   description: string
+  tags: string[]
   path: string
   is_symlink: boolean
   target_path: string | null
