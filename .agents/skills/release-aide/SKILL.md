@@ -25,7 +25,7 @@ description: >
 
 3. 询问用户目标版本号，建议遵循 semver（根据改动内容推荐 bump major/minor/patch）
 
-### 2. 生成 Changelog
+### 2. 生成 Release Notes
 
 1. 获取当前 tag 到 HEAD 之间的 commit：
    ```bash
@@ -38,21 +38,30 @@ description: >
    git diff "${PREV_TAG}..HEAD" --stat
    ```
 
-3. 综合 commit 信息 + 代码 diff，生成结构化的 changelog，按类别组织：
-   - **New Features**
-   - **Bug Fixes**
-   - **Refactoring**
-   - **Other Changes**
+3. 综合 commit 信息 + 代码 diff，生成结构化的 changelog，写入 `.release-notes.md`：
+   ```bash
+   cat > .release-notes.md << 'EOF'
+   ## v<version> (YYYY-MM-DD)
+
+   ### Features
+
+   - ...
+
+   ### Bug Fixes
+
+   - ...
+   EOF
+   ```
 
 ### 3. 用户确认
 
 展示以下信息给用户确认：
 
 1. **新版本号**
-2. **Changelog**（markdown 格式）
+2. **Changelog**（来自 `.release-notes.md`）
 3. **待修改的文件**：package.json、src-tauri/tauri.conf.json
 
-等待用户确认 yes/no。
+等待用户确认 yes/no。如需调整 changelog，直接编辑 `.release-notes.md` 再确认。
 
 ### 4. 执行发版
 
@@ -60,17 +69,16 @@ description: >
 
 1. 更新 `package.json` 中的 `version` 字段
 2. 更新 `src-tauri/tauri.conf.json` 中的 `version` 字段
-3. 清理 changelog 中不必要的信息
-4. 提交：
+3. 提交（包含 `.release-notes.md`）：
    ```bash
-   git add package.json src-tauri/tauri.conf.json
+   git add package.json src-tauri/tauri.conf.json .release-notes.md
    git commit -m "chore(release): v<version>"
    ```
-5. 打 tag：
+4. 打 tag：
    ```bash
    git tag v<version>
    ```
-6. 推送代码和 tag：
+5. 推送代码和 tag：
    ```bash
    git push && git push --tags
    ```
@@ -79,16 +87,5 @@ description: >
 
 等待 CI 构建完成（可以在 Actions 页面观察进度）：
 1. 确认 build workflow 成功
-2. 从 Actions artifact 下载产物
-3. 创建 GitHub Release（包含可执行文件和更新包）：
-   ```bash
-   gh release create v<version> \
-     --title "v<version>" \
-     --notes "<changelog>" \
-     aide.app.zip \
-     aide-macos/src-tauri/target/release/bundle/dmg/aide_<version>_aarch64.dmg \
-     aide-macos/src-tauri/target/release/bundle/macos/aide_<version>_aarch64.tar.gz \
-     aide-macos/src-tauri/target/release/bundle/macos/aide_<version>_aarch64.tar.gz.sig \
-     aide-macos/src-tauri/target/release/bundle/macos/latest.json
-   ```
-4. 将 Release 链接发送给用户确认
+2. CI 会自动创建 GitHub Release（包含产物 + `.release-notes.md` 内容作为 notes）
+3. 将 Release 链接发送给用户确认

@@ -36,16 +36,6 @@ jobs:
           zip -r aide.zip aide.app
           mv aide.zip ../../../../../aide.app.zip
 
-      - name: Generate changelog
-        run: |
-          CURRENT_TAG="${GITHUB_REF_NAME}"
-          PREV_TAG=$(git tag --sort=-v:refname | awk -v current="$CURRENT_TAG" 'NR==1 && $0==current {getline; print; exit} NR==1 {print; exit}')
-          if [ -n "$PREV_TAG" ]; then
-            git log "${PREV_TAG}..${CURRENT_TAG}" --oneline --no-decorate --format="* %s" > /tmp/changelog.txt
-          else
-            git log --oneline --no-decorate --format="* %s" > /tmp/changelog.txt
-          fi
-
       - name: Prepare updater artifacts
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
@@ -58,7 +48,7 @@ jobs:
             SIGNATURE=$(cat "$SIG")
             jq -n \
               --arg version "$VERSION" \
-              --rawfile notes /tmp/changelog.txt \
+              --rawfile notes .release-notes.md \
               --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
               --arg sig "$SIGNATURE" \
               --arg url "https://github.com/lexmin0412/aide/releases/download/${TAG}/$(basename $TAR_GZ)" \
@@ -74,6 +64,19 @@ jobs:
                 }
               }' > "$MACOS_DIR/latest.json"
           fi
+
+      - name: Create GitHub Release
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --notes-file .release-notes.md \
+            src-tauri/target/release/bundle/dmg/*.dmg \
+            aide.app.zip \
+            src-tauri/target/release/bundle/macos/*.tar.gz \
+            src-tauri/target/release/bundle/macos/*.tar.gz.sig \
+            src-tauri/target/release/bundle/macos/latest.json
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       - uses: actions/upload-artifact@v4
         with:
