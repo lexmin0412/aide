@@ -10,6 +10,9 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
 
       - uses: pnpm/action-setup@v4
 
@@ -23,6 +26,9 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - run: pnpm tauri build
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       - name: Zip .app bundle
         run: |
@@ -30,10 +36,52 @@ jobs:
           zip -r aide.zip aide.app
           mv aide.zip ../../../../../aide.app.zip
 
+      - name: Generate changelog
+        run: |
+          CURRENT_TAG="${GITHUB_REF_NAME}"
+          PREV_TAG=$(git tag --sort=-v:refname | awk -v current="$CURRENT_TAG" 'NR==1 && $0==current {getline; print; exit} NR==1 {print; exit}')
+          if [ -n "$PREV_TAG" ]; then
+            git log "${PREV_TAG}..${CURRENT_TAG}" --oneline --no-decorate --format="* %s" > /tmp/changelog.txt
+          else
+            git log --oneline --no-decorate --format="* %s" > /tmp/changelog.txt
+          fi
+
+      - name: Prepare updater artifacts
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          TAG="${GITHUB_REF_NAME}"
+          MACOS_DIR="src-tauri/target/release/bundle/macos"
+          TAR_GZ=$(ls "$MACOS_DIR"/*.tar.gz 2>/dev/null | head -1)
+          SIG=$(ls "$MACOS_DIR"/*.tar.gz.sig 2>/dev/null | head -1)
+
+          if [ -n "$TAR_GZ" ] && [ -n "$SIG" ]; then
+            SIGNATURE=$(cat "$SIG")
+            jq -n \
+              --arg version "$VERSION" \
+              --rawfile notes /tmp/changelog.txt \
+              --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+              --arg sig "$SIGNATURE" \
+              --arg url "https://github.com/lexmin0412/aide/releases/download/${TAG}/$(basename $TAR_GZ)" \
+              '{
+                version: $version,
+                notes: $notes | rtrimstr("\n"),
+                pub_date: $pub_date,
+                platforms: {
+                  "darwin-aarch64": {
+                    signature: $sig,
+                    url: $url
+                  }
+                }
+              }' > "$MACOS_DIR/latest.json"
+          fi
+
       - uses: actions/upload-artifact@v4
         with:
           name: aide-macos
           path: |
             src-tauri/target/release/bundle/dmg/*.dmg
             aide.app.zip
+            src-tauri/target/release/bundle/macos/*.tar.gz
+            src-tauri/target/release/bundle/macos/*.tar.gz.sig
+            src-tauri/target/release/bundle/macos/latest.json
           retention-days: 90

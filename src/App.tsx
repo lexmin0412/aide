@@ -4,6 +4,7 @@ import SkillGrid from "./components/SkillGrid"
 import SkillDetail from "./components/SkillDetail"
 import { ConfigPanel } from "./components/ConfigPanel"
 import MCPPage from "./components/MCPPage"
+import { UpdateDialog } from "./components/UpdateDialog"
 import type { SkillInfo } from "./types"
 import "./App.css"
 
@@ -13,6 +14,7 @@ export default function App() {
   const [page, setPage] = useState<Page>("skills")
   const [selectedSkill, setSelectedSkill] = useState<SkillInfo | null>(null)
   const [gridKey, setGridKey] = useState(0)
+  const [showUpdate, setShowUpdate] = useState(false)
 
   const tabs: { key: Page; label: string }[] = [
     { key: "skills", label: "Skills" },
@@ -45,11 +47,22 @@ export default function App() {
             </button>
           ))}
         </div>
+        <button
+          onClick={() => setShowUpdate(true)}
+          className="ml-auto text-muted-foreground hover:text-foreground transition-colors"
+          title="Check for updates"
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="7 10 12 15 17 10" />
+            <line x1="12" y1="15" x2="12" y2="3" />
+          </svg>
+        </button>
         <a
           href="https://github.com/lexmin0412/aide"
           target="_blank"
           rel="noopener noreferrer"
-          className="ml-auto text-muted-foreground hover:text-foreground transition-colors"
+          className="text-muted-foreground hover:text-foreground transition-colors"
           title="GitHub"
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
@@ -57,6 +70,7 @@ export default function App() {
           </svg>
         </a>
       </div>
+      {showUpdate && <UpdateDialog onClose={() => setShowUpdate(false)} />}
       <div className="flex-1 relative overflow-hidden">
         <div className={`absolute inset-0 ${page === "skills" ? "" : "hidden"}`}>
           {selectedSkill ? (

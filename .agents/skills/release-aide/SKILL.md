@@ -80,12 +80,15 @@ description: >
 等待 CI 构建完成（可以在 Actions 页面观察进度）：
 1. 确认 build workflow 成功
 2. 从 Actions artifact 下载产物
-3. 创建 GitHub Release：
+3. 创建 GitHub Release（包含可执行文件和更新包）：
    ```bash
    gh release create v<version> \
      --title "v<version>" \
      --notes "<changelog>" \
      aide.app.zip \
-     src-tauri/target/release/bundle/dmg/aide_<version>_aarch64.dmg
+     aide-macos/src-tauri/target/release/bundle/dmg/aide_<version>_aarch64.dmg \
+     aide-macos/src-tauri/target/release/bundle/macos/aide_<version>_aarch64.tar.gz \
+     aide-macos/src-tauri/target/release/bundle/macos/aide_<version>_aarch64.tar.gz.sig \
+     aide-macos/src-tauri/target/release/bundle/macos/latest.json
    ```
 4. 将 Release 链接发送给用户确认
