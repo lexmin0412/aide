@@ -68,7 +68,7 @@ src-tauri/
 
 ## Conventions
 
-- **No comments** in source code unless explaining a non-obvious decision
+- **English only**: all code, comments, documentation, commit messages, and release notes must be in English
 - **No emoji** in code or commit messages
 - **No README** files unless explicitly requested
 - All Rust commands return `Result<T, String>`
