@@ -18,7 +18,7 @@ export function SkillCard({ skill, allTags, onClick, onTagsChanged }: SkillCardP
       className="group bg-card border border-border rounded-xl p-5 cursor-pointer transition-all hover:border-foreground/30 hover:bg-card/80 flex flex-col gap-2.5 min-h-[140px] relative"
     >
       <div className="flex items-center gap-2">
-        <span className="text-base">{skill.is_symlink ? "↗" : "🪄"}</span>
+        <span className="text-base">{skill.is_symlink ? "↗" : "◆"}</span>
         <span className="text-sm font-semibold truncate">{skill.display_name}</span>
       </div>
       <div className="text-xs text-muted-foreground line-clamp-3 flex-1 leading-relaxed">
