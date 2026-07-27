@@ -46,10 +46,7 @@ export default function MCPPage() {
   const [servers, setServers] = useState<McpServer[]>([]);
   const [tools, setTools] = useState<ToolOption[]>([]);
   const [editing, setEditing] = useState<McpServer | null>(null);
-  const [showAdd, setShowAdd] = useState(() => {
-    console.log("showAdd 初始化");
-    return false;
-  });
+  const [showAdd, setShowAdd] = useState(false);
   const [addMode, setAddMode] = useState<AddMode>("form");
   const [syncing, setSyncing] = useState<string | null>(null);
 
@@ -62,12 +59,10 @@ export default function MCPPage() {
     setTools(t);
   };
   useEffect(() => {
-    console.log("页面挂载");
     load();
   }, []);
 
   const save = async (updated: McpServer[]) => {
-    console.log("trigger save");
     await invoke("save_mcp_servers", { servers: updated });
     setServers(updated);
     setShowAdd(false);
@@ -114,7 +109,6 @@ export default function MCPPage() {
     );
   };
 
-  console.log("showAdd", showAdd);
 
   return (
     <div className="h-full flex flex-col">
@@ -286,7 +280,6 @@ export default function MCPPage() {
           server={editing}
           tools={tools}
           onSave={(s) => {
-            console.log("trigger onSave inner", s);
             if (editing) {
               save(servers.map((x) => (x.name === editing.name ? s : x)));
             } else {
@@ -295,7 +288,6 @@ export default function MCPPage() {
           }}
           onImport={(ns) => save([...servers, ...ns])}
           onClose={() => {
-            console.log("trigger show close");
             setShowAdd(false);
           }}
         />
@@ -324,18 +316,10 @@ function AddServerDialog({
   const [formSubmit, setFormSubmit] = useState<(() => void) | null>(null);
   const [importSubmit, setImportSubmit] = useState<(() => void) | null>(null);
 
-  console.log(
-    "[AddServerDialog] render, server:",
-    server?.name ?? "null",
-    "formSubmit:",
-    !!formSubmit
-  );
-
   return (
     <Dialog
       open
       onOpenChange={(open) => {
-        console.log("[Dialog] onOpenChange:", open);
         if (!open) onClose();
       }}
     >
@@ -374,7 +358,6 @@ function AddServerDialog({
               server={server}
               tools={tools}
               onSave={(...params) => {
-                console.log("trigger server form save", ...params);
                 onSave(...params);
               }}
               onReady={setFormSubmit}
@@ -434,7 +417,6 @@ function ServerForm({
   }, [server]);
 
   const submit = () => {
-    console.log('trigger submit')
     if (!name.trim()) return;
     onSave({
       name: name.trim(),
@@ -458,7 +440,6 @@ function ServerForm({
   submitRef.current = submit;
 
   useEffect(() => {
-    console.log('trigger server useEffect', server)
     onReady(() => () => submitRef.current());
   }, [server]);
 

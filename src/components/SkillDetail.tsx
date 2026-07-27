@@ -180,7 +180,7 @@ export default function SkillDetail({ skill, onBack, onDelete }: SkillDetailProp
         <Button variant="ghost" size="sm" onClick={onBack}>← Back</Button>
         <div className="flex flex-col min-w-0 flex-1">
           <div className="text-sm font-medium truncate">
-            {skill.is_symlink && "🔗 "}{skill.display_name}
+            {skill.is_symlink && "↗ "}{skill.display_name}
           </div>
           <div className="text-[10px] text-muted-foreground font-mono truncate">
             {skill.is_symlink && skill.target_path ? (
