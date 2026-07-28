@@ -21,7 +21,10 @@ src/
 │   ├── MCPPage.tsx        # MCP servers management page
 │   ├── ConfigPanel.tsx    # Config file browser per tool
 │   ├── Editor.tsx         # CodeMirror 6 + image viewer wrapper
+│   ├── ErrorBoundary.tsx  # Global error boundary
 │   ├── FileTree.tsx       # Directory tree with context menu
+│   ├── TagEditor.tsx      # Inline tag editor popover
+│   ├── UpdateDialog.tsx   # Auto-update check & install dialog
 │   └── ui/                # shadcn/ui primitives (button, dialog, input, etc.)
 ├── lib/
 │   ├── utils.ts           # cn() utility (clsx + tailwind-merge)
@@ -34,7 +37,7 @@ src/
 
 src-tauri/
 └── src/
-    ├── lib.rs             # Tauri commands (21 commands)
+    ├── lib.rs             # Tauri commands (22 commands)
     ├── main.rs            # Entry point
     ├── adapter/mod.rs     # Tool adapter definitions (8 AI tools)
     └── mcp.rs             # MCP config management
@@ -65,6 +68,7 @@ src-tauri/
 | `sync_mcp_tool` | `tool_key: string` | `McpSyncResult` | Sync MCP to one tool |
 | `sync_mcp_all` | — | `McpSyncResult[]` | Sync MCP to all tools |
 | `import_mcp_all` | — | `ImportResult[]` | Import MCP configs from all tools |
+| `update_skill_tags` | `path, tags: string[]` | `void` | Update tags in SKILL.md frontmatter |
 
 ## Conventions
 
@@ -83,6 +87,7 @@ src-tauri/
 ```bash
 pnpm tauri dev      # Start dev server with hot-reload
 pnpm build          # TypeScript check + Vite build
+pnpm tauri build    # Production build + bundling
 ```
 
 ## Architecture Notes
