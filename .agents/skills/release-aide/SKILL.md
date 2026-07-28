@@ -41,8 +41,6 @@ description: >
 3. 综合 commit 信息 + 代码 diff，生成结构化的 changelog，写入 `.release-notes.md`：
    ```bash
    cat > .release-notes.md << 'EOF'
-   ## v<version> (YYYY-MM-DD)
-
    ### Features
 
    - ...
