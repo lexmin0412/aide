@@ -23,6 +23,8 @@ interface FileTreeProps {
 
 export interface FileTreeHandle {
   refresh: () => Promise<void>
+  newFile: () => void
+  newFolder: () => void
 }
 
 const TEXT_EXTENSIONS = new Set([
@@ -71,8 +73,6 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
       await loadDir(dirPath)
     }
   }, [rootPath, expandedDirs, loadDir])
-
-  useImperativeHandle(ref, () => ({ refresh }), [refresh])
 
   const toggleDir = useCallback(
     async (entry: FileEntry) => {
@@ -200,6 +200,12 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
     setEditing({ type: "newFolder", parentDir: dirPath, value: "" })
   }, [])
 
+  useImperativeHandle(ref, () => ({
+    refresh,
+    newFile: () => startNewFile(rootPath),
+    newFolder: () => startNewFolder(rootPath),
+  }), [refresh, startNewFile, startNewFolder, rootPath])
+
   const renderInlineInput = (paddingLeft: number) => (
     <div style={{ paddingLeft: `${paddingLeft}px` }} className="flex items-center gap-1 px-2 py-0.5">
       <Input
@@ -211,6 +217,7 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
           if (e.key === "Escape") { e.preventDefault(); cancelEdit() }
         }}
         onBlur={cancelEdit}
+        autoFocus
         className="h-5 text-xs px-1 py-0"
         placeholder={editing!.type === "newFile" ? "filename" : editing!.type === "newFolder" ? "folder name" : undefined}
       />

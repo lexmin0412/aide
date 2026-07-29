@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from "react"
 import { invoke } from "@tauri-apps/api/core"
-import { RefreshCw, Trash2 } from "lucide-react"
+import { RefreshCw, Trash2, FilePlus, FolderPlus } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -196,15 +196,31 @@ export default function SkillDetail({ skill, onBack, onDelete }: SkillDetailProp
       </div>
       <div className="flex-1 flex overflow-hidden">
         <div className="w-64 bg-card/40 border-r border-border overflow-y-auto shrink-0">
-          <div className="flex items-center justify-between px-3 py-2 text-[10px] text-muted-foreground font-mono border-b border-border">
-            <span className="truncate">{rootPath.split("/").pop()}</span>
-            <button
-              className="p-0.5 text-muted-foreground hover:text-foreground rounded hover:bg-card/60 shrink-0 ml-1"
-              onClick={handleRefresh}
-              title="Refresh"
-            >
-              <RefreshCw size={12} />
-            </button>
+          <div className="flex items-center gap-0.5 px-3 py-2 text-[10px] text-muted-foreground font-mono border-b border-border">
+            <span className="truncate flex-1">{rootPath.split("/").pop()}</span>
+            <div className="flex items-center gap-0.5 shrink-0">
+              <button
+                className="p-0.5 text-muted-foreground hover:text-foreground rounded hover:bg-card/60"
+                onClick={() => treeRef.current?.newFile()}
+                title="New File"
+              >
+                <FilePlus size={12} />
+              </button>
+              <button
+                className="p-0.5 text-muted-foreground hover:text-foreground rounded hover:bg-card/60"
+                onClick={() => treeRef.current?.newFolder()}
+                title="New Folder"
+              >
+                <FolderPlus size={12} />
+              </button>
+              <button
+                className="p-0.5 text-muted-foreground hover:text-foreground rounded hover:bg-card/60"
+                onClick={handleRefresh}
+                title="Refresh"
+              >
+                <RefreshCw size={12} />
+              </button>
+            </div>
           </div>
           <FileTree ref={treeRef} rootPath={rootPath} onSelectFile={openFile} selectedPath={activeTabPath} onFileDeleted={handleFileDeleted} onFileRenamed={handleFileRenamed} />
         </div>
