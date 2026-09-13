@@ -41,6 +41,39 @@ pub struct SkillSource {
     pub id: String,
     pub source: String,
     pub installed_at: u64,
+    /// HEAD commit of the skill's repo subtree at install/update time.
+    #[serde(default)]
+    pub commit: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct SkillUpdate {
+    pub skill: String,
+    pub id: String,
+    pub source: String,
+    pub installed_commit: String,
+    pub latest_commit: String,
+}
+
+/// Latest commit touching `path` (or the repo root when None) via the
+/// unauthenticated GitHub API.
+fn latest_commit(owner: &str, repo: &str, path: Option<&str>) -> Result<String, String> {
+    let mut url = format!("https://api.github.com/repos/{owner}/{repo}/commits?per_page=1");
+    if let Some(p) = path {
+        url.push_str(&format!("&path={}", urlencode(p)));
+    }
+    let body = ureq::get(&url)
+        .timeout(REQUEST_TIMEOUT)
+        .call()
+        .map_err(|e| format!("GitHub API failed: {e}"))?
+        .into_string()
+        .map_err(|e| e.to_string())?;
+    let parsed: serde_json::Value =
+        serde_json::from_str(&body).map_err(|e| e.to_string())?;
+    parsed[0]["sha"]
+        .as_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| format!("Unexpected GitHub API response for {owner}/{repo}"))
 }
 
 pub fn search_registry(query: &str, limit: usize) -> Result<Vec<RegistrySkill>, String> {
@@ -129,7 +162,45 @@ pub fn read_sources(aide_dir: &Path) -> HashMap<String, SkillSource> {
         .unwrap_or_default()
 }
 
-pub fn record_source(aide_dir: &Path, skill: &str, id: &str, source: &str) -> Result<(), String> {
+/// Compare each registry-installed skill's recorded commit with the remote
+/// HEAD for its subtree. Entries without a recorded commit (local imports,
+/// failed lookups) are skipped.
+pub fn check_updates(aide_dir: &Path) -> Vec<SkillUpdate> {
+    let sources = read_sources(aide_dir);
+    let mut updates = Vec::new();
+    for (skill, meta) in sources {
+        let installed_commit = match &meta.commit {
+            Some(c) => c.clone(),
+            None => continue,
+        };
+        let parts: Vec<&str> = meta.id.split('/').collect();
+        if parts.len() < 2 {
+            continue;
+        }
+        let subtree = if parts.len() > 2 { Some(parts[2]) } else { None };
+        let Ok(latest) = latest_commit(parts[0], parts[1], subtree) else {
+            continue;
+        };
+        if latest != installed_commit {
+            updates.push(SkillUpdate {
+                skill,
+                id: meta.id.clone(),
+                source: meta.source.clone(),
+                installed_commit,
+                latest_commit: latest,
+            });
+        }
+    }
+    updates
+}
+
+pub fn record_source(
+    aide_dir: &Path,
+    skill: &str,
+    id: &str,
+    source: &str,
+    commit: Option<String>,
+) -> Result<(), String> {
     let mut map = read_sources(aide_dir);
     map.insert(
         skill.to_string(),
@@ -140,6 +211,7 @@ pub fn record_source(aide_dir: &Path, skill: &str, id: &str, source: &str) -> Re
                 .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0),
+            commit,
         },
     );
     fs::create_dir_all(aide_dir).map_err(|e| e.to_string())?;
@@ -215,6 +287,7 @@ pub fn install_from_id(
     id: &str,
     skills_dir: &Path,
     aide_dir: &Path,
+    force: bool,
 ) -> Result<RemoteInstallResult, String> {
     let (owner, repo, only_skill) = parse_skill_id(id)?;
     if owner.is_empty() || repo.is_empty() {
@@ -250,19 +323,24 @@ pub fn install_from_id(
 
         let mut installed = Vec::new();
         let mut skipped = Vec::new();
+        let head_commit = latest_commit(&owner, &repo, only_skill.as_deref()).ok();
         for src in candidates {
             let name = src
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .ok_or("Invalid skill folder name")?;
             let dest = skills_dir.join(&name);
-            if dest.exists() {
+            if dest.exists() && !force {
                 skipped.push(name);
                 continue;
             }
+            if dest.exists() {
+                // Replaced content goes to the trash so an update is reversible.
+                let _ = trash::delete(&dest);
+            }
             crate::copy_dir_recursive(&src, &dest)
                 .map_err(|e| format!("Failed to copy \"{name}\": {e}"))?;
-            record_source(aide_dir, &name, id, &format!("{owner}/{repo}"))?;
+            record_source(aide_dir, &name, id, &format!("{owner}/{repo}"), head_commit.clone())?;
             installed.push(name);
         }
         Ok(RemoteInstallResult { installed, skipped })
@@ -333,7 +411,7 @@ mod tests {
         let base = std::env::temp_dir().join(format!("aide-sources-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         fs::create_dir_all(&base).unwrap();
-        record_source(&base, "my-skill", "owner/repo/my-skill", "owner/repo").unwrap();
+        record_source(&base, "my-skill", "owner/repo/my-skill", "owner/repo", Some("abc".into())).unwrap();
         let map = read_sources(&base);
         let entry = map.get("my-skill").expect("source recorded");
         assert_eq!(entry.id, "owner/repo/my-skill");

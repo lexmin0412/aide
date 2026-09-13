@@ -26,6 +26,13 @@ interface MarketDialogProps {
   onInstalled: () => void
 }
 
+interface SkillUpdateInfo {
+  skill: string
+  id: string
+  installed_commit: string
+  latest_commit: string
+}
+
 function formatInstalls(n: number): string {
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k`
   return String(n)
@@ -36,11 +43,16 @@ export function MarketDialog({ open, skills, onClose, onInstalled }: MarketDialo
   const [results, setResults] = useState<RegistrySkill[]>([])
   const [searching, setSearching] = useState(false)
   const [installing, setInstalling] = useState<string | null>(null)
+  const [updates, setUpdates] = useState<SkillUpdateInfo[]>([])
+  const [updating, setUpdating] = useState<string | null>(null)
 
   useEffect(() => {
     if (!open) return
     setQuery("")
     setResults([])
+    invoke<SkillUpdateInfo[]>("check_skill_updates")
+      .then(setUpdates)
+      .catch(() => {})
   }, [open])
 
   useEffect(() => {
@@ -66,6 +78,20 @@ export function MarketDialog({ open, skills, onClose, onInstalled }: MarketDialo
   const isInstalled = (id: string) => {
     const skillName = id.split("/").pop() || ""
     return skills.some((s) => s.name === skillName)
+  }
+
+  const updateSkill = async (skill: string) => {
+    setUpdating(skill)
+    try {
+      const result = await invoke<{ installed: string[] }>("update_skill", { skill })
+      toast(`Updated: ${result.installed.join(", ")}`, "success")
+      setUpdates((prev) => prev.filter((u) => u.skill !== skill))
+      onInstalled()
+    } catch (e) {
+      toast(`Update failed: ${e}`, "error")
+    } finally {
+      setUpdating(null)
+    }
   }
 
   const install = async (id: string) => {
@@ -104,6 +130,30 @@ export function MarketDialog({ open, skills, onClose, onInstalled }: MarketDialo
             <span className="font-mono text-[10px] bg-muted px-1 rounded">~/.agents/skills</span>
           </DialogDescription>
         </DialogHeader>
+        {updates.length > 0 && (
+          <div className="border border-border rounded-lg p-2.5 space-y-1.5 bg-primary/[0.04]">
+            <p className="text-[11px] font-medium text-foreground">
+              {updates.length} update{updates.length > 1 ? "s" : ""} available
+            </p>
+            {updates.map((u) => (
+              <div key={u.skill} className="flex items-center gap-2">
+                <span className="text-xs truncate flex-1 min-w-0">{u.skill}</span>
+                <span className="text-[10px] text-muted-foreground font-mono shrink-0">
+                  {u.installed_commit.slice(0, 7)} → {u.latest_commit.slice(0, 7)}
+                </span>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-6 text-xs px-2 shrink-0"
+                  disabled={updating === u.skill}
+                  onClick={() => void updateSkill(u.skill)}
+                >
+                  {updating === u.skill ? "Updating..." : "Update"}
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
         <div className="flex items-center gap-2 border border-input rounded-lg px-2.5 h-8">
           <Search size={13} className="text-muted-foreground shrink-0" />
           <input

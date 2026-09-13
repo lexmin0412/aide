@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Power, PowerOff, Pencil, Trash2, XIcon } from "lucide-react";
+import { Power, PowerOff, Pencil, Trash2, XIcon, Bot } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -10,6 +10,8 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "@/lib/toast";
 import { CardGridSkeleton } from "./Skeleton";
+import { Switch } from "@/components/ui/switch";
+import type { AgentServerStatus } from "../types";
 import {
   Select,
   SelectContent,
@@ -54,6 +56,8 @@ export default function MCPPage() {
   const [addMode, setAddMode] = useState<AddMode>("form");
   const [syncing, setSyncing] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [agent, setAgent] = useState<AgentServerStatus | null>(null);
+  const [agentBusy, setAgentBusy] = useState(false);
 
   const load = async () => {
     const [s, t] = await Promise.all([
@@ -67,6 +71,9 @@ export default function MCPPage() {
     load()
       .catch((e) => console.error("Failed to load MCP servers:", e))
       .finally(() => setLoading(false));
+    invoke<AgentServerStatus>("get_agent_server")
+      .then(setAgent)
+      .catch(() => {});
   }, []);
 
   const save = async (updated: McpServer[]) => {
@@ -91,6 +98,26 @@ export default function MCPPage() {
         s.name === name ? { ...s, disabled: !s.disabled } : s
       )
     );
+
+  const toggleAgent = async (enable: boolean) => {
+    setAgentBusy(true);
+    try {
+      const status = await invoke<AgentServerStatus>("enable_agent_access", { enable });
+      setAgent(status);
+      if (enable) {
+        toast(
+          "Agent access enabled: the aide MCP server was added to your tools' configs (sync to apply)",
+          "success"
+        );
+      } else {
+        toast("Agent access disabled", "info");
+      }
+    } catch (e) {
+      toast(`Failed to toggle agent access: ${e}`, "error");
+    } finally {
+      setAgentBusy(false);
+    }
+  };
 
   const syncTool = async (key: string) => {
     setSyncing(key);
@@ -187,6 +214,27 @@ export default function MCPPage() {
           </Button>
         ))}
       </div>
+
+      {agent && (
+        <div className="flex items-center gap-3 mx-6 mt-4 p-3 rounded-lg border border-border bg-card/60 shrink-0">
+          <Bot size={16} className="text-primary shrink-0" />
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-medium">Agent access</div>
+            <p className="text-[11px] text-muted-foreground truncate">
+              {agent.enabled
+                ? "Enabled - agents can install, update and publish skills through aide"
+                : agent.binary_available
+                  ? "Expose aide to your AI agents as an MCP server (install/update/publish skills)"
+                  : "aide-mcp binary not found next to the app"}
+            </p>
+          </div>
+          <Switch
+            checked={agent.enabled}
+            disabled={agentBusy || !agent.binary_available}
+            onCheckedChange={(v) => void toggleAgent(v)}
+          />
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto p-6">
         {loading ? (

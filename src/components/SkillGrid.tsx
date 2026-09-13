@@ -25,6 +25,7 @@ export default function SkillGrid({ onSelectSkill }: SkillGridProps) {
   const [newOpen, setNewOpen] = useState(false)
   const [marketOpen, setMarketOpen] = useState(false)
   const [gitOpen, setGitOpen] = useState(false)
+  const [updateCount, setUpdateCount] = useState(0)
   const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set())
   // Subscribe narrowly: the grid must not re-render on every scroll frame.
   const searchQuery = useSkillStore((s) => s.searchQuery)
@@ -36,6 +37,12 @@ export default function SkillGrid({ onSelectSkill }: SkillGridProps) {
     return invoke<SkillInfo[]>("list_skills")
       .then(setSkills)
       .catch((e) => console.error("Failed to list skills:", e))
+  }
+
+  const refreshUpdates = () => {
+    invoke<number[]>("check_skill_updates")
+      .then((u) => setUpdateCount(u.length))
+      .catch(() => {})
   }
 
   const importSkill = async () => {
@@ -52,6 +59,10 @@ export default function SkillGrid({ onSelectSkill }: SkillGridProps) {
 
   useEffect(() => {
     refresh().finally(() => setLoading(false))
+    // Silent check on mount: a dot on the Browse button signals stale skills.
+    invoke<number[]>("check_skill_updates")
+      .then((u) => setUpdateCount(u.length))
+      .catch(() => {})
   }, [])
 
   useEffect(() => {
@@ -149,8 +160,16 @@ export default function SkillGrid({ onSelectSkill }: SkillGridProps) {
           <GitBranch size={13} /> Git
         </Button>
         <Button variant="outline" size="sm" onClick={() => setSyncOpen(true)}>Sync</Button>
-        <Button variant="outline" size="sm" onClick={() => setMarketOpen(true)}>
+        <Button variant="outline" size="sm" className="relative" onClick={() => setMarketOpen(true)}>
           <Store size={13} /> Browse
+          {updateCount > 0 && (
+            <span
+              className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-primary text-primary-foreground text-[9px] font-medium flex items-center justify-center"
+              title={`${updateCount} skill update${updateCount > 1 ? "s" : ""} available`}
+            >
+              {updateCount}
+            </span>
+          )}
         </Button>
         <Button variant="outline" size="sm" onClick={() => void importSkill()}>
           <FolderInput size={13} /> Import
@@ -239,7 +258,7 @@ export default function SkillGrid({ onSelectSkill }: SkillGridProps) {
         open={marketOpen}
         skills={skills}
         onClose={() => setMarketOpen(false)}
-        onInstalled={() => void refresh()}
+        onInstalled={() => { void refresh(); refreshUpdates() }}
       />
       <NewSkillDialog
         open={newOpen}

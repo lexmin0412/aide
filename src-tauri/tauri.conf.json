@@ -24,7 +24,9 @@
       "devCsp": "default-src 'self' ipc: http://ipc.localhost ws://127.0.0.1:1430 http://127.0.0.1:1430; img-src 'self' asset: http://asset.localhost https://asset.localhost data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost ws://127.0.0.1:1430 ws://127.0.0.1:1431 http://127.0.0.1:1430",
       "assetProtocol": {
         "enable": true,
-        "scope": ["$HOME/**"]
+        "scope": [
+          "$HOME/**"
+        ]
       }
     }
   },
@@ -38,7 +40,10 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "createUpdaterArtifacts": true
+    "createUpdaterArtifacts": true,
+    "externalBin": [
+      "binaries/aide-mcp"
+    ]
   },
   "plugins": {
     "updater": {

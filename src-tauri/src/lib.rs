@@ -4,10 +4,10 @@ use std::{fs, io};
 
 use serde::{Deserialize, Serialize};
 
-mod adapter;
-mod git_sync;
-mod mcp;
-mod registry;
+pub mod adapter;
+pub mod git_sync;
+pub mod mcp;
+pub mod registry;
 
 #[derive(Debug, Serialize)]
 pub struct FileEntry {
@@ -167,7 +167,7 @@ fn search_file(
     Ok(out)
 }
 
-fn search_skills_in(dir: &Path, query: &str) -> Vec<SkillSearchMatch> {
+pub fn search_skills_in(dir: &Path, query: &str) -> Vec<SkillSearchMatch> {
     let q = query.trim().to_lowercase();
     let mut matches = Vec::new();
     if q.is_empty() {
@@ -298,8 +298,8 @@ fn parse_skill_frontmatter(content: &str) -> (Option<String>, Option<String>, Ve
     (None, None, Vec::new())
 }
 
-#[tauri::command]
-fn list_skills() -> Result<Vec<SkillInfo>, String> {
+/// Core of `list_skills`, shared with the aide-mcp agent binary.
+pub fn skill_infos() -> Result<Vec<SkillInfo>, String> {
     let skills_dir = dirs::home_dir()
         .ok_or_else(|| "Cannot find home directory".to_string())?
         .join(".agents")
@@ -377,6 +377,11 @@ fn list_skills() -> Result<Vec<SkillInfo>, String> {
 }
 
 #[tauri::command]
+fn list_skills() -> Result<Vec<SkillInfo>, String> {
+    skill_infos()
+}
+
+#[tauri::command]
 fn list_directory(path: String) -> Result<Vec<FileEntry>, String> {
     let dir = Path::new(&path);
     if !dir.is_dir() {
@@ -451,7 +456,7 @@ fn import_skill(source: String) -> Result<String, String> {    let skills_dir = 
     let name = import_skill_into(Path::new(&source), &skills_dir)?;
     if let Some(home) = dirs::home_dir() {
         // Record where the skill came from so provenance is visible in the UI.
-        let _ = registry::record_source(&home.join(".aide"), &name, &source, "local");
+        let _ = registry::record_source(&home.join(".aide"), &name, &source, "local", None);
     }
     Ok(name)
 }
@@ -466,7 +471,96 @@ fn install_skill_from_registry(id: String) -> Result<registry::RemoteInstallResu
     let home = dirs::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
     let skills_dir = resolve_skills_source()?;
     fs::create_dir_all(&skills_dir).map_err(|e| e.to_string())?;
-    registry::install_from_id(&id, &skills_dir, &home.join(".aide"))
+    registry::install_from_id(&id, &skills_dir, &home.join(".aide"), false)
+}
+
+#[tauri::command]
+fn check_skill_updates() -> Vec<registry::SkillUpdate> {
+    registry::check_updates(
+        &dirs::home_dir()
+            .map(|h| h.join(".aide"))
+            .unwrap_or_default(),
+    )
+}
+
+#[tauri::command]
+fn update_skill(skill: String) -> Result<registry::RemoteInstallResult, String> {
+    let home = dirs::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
+    let aide_dir = home.join(".aide");
+    let sources = registry::read_sources(&aide_dir);
+    let meta = sources
+        .get(&skill)
+        .ok_or_else(|| format!("No install source recorded for \"{skill}\""))?
+        .clone();
+    let skills_dir = resolve_skills_source()?;
+    fs::create_dir_all(&skills_dir).map_err(|e| e.to_string())?;
+    registry::install_from_id(&meta.id, &skills_dir, &aide_dir, true)
+}
+
+const AGENT_SERVER_NAME: &str = "aide";
+
+/// The aide-mcp sidecar binary sits next to the main executable in packaged
+/// builds and in target/debug during development.
+fn sidecar_path() -> Option<std::path::PathBuf> {
+    let dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    ["aide-mcp", "aide-mcp.exe"]
+        .iter()
+        .map(|n| dir.join(n))
+        .find(|p| p.exists())
+}
+
+#[derive(Serialize)]
+pub struct AgentServerStatus {
+    pub enabled: bool,
+    pub binary_available: bool,
+    pub command: Option<String>,
+}
+
+#[tauri::command]
+fn get_agent_server() -> AgentServerStatus {
+    let binary = sidecar_path();
+    let enabled = binary.is_some()
+        && mcp::read_central()
+            .map(|c| {
+                c.servers
+                    .get(AGENT_SERVER_NAME)
+                    .map(|s| !s.disabled.unwrap_or(false))
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
+    AgentServerStatus {
+        enabled,
+        binary_available: binary.is_some(),
+        command: binary.map(|p| p.to_string_lossy().to_string()),
+    }
+}
+
+#[tauri::command]
+fn enable_agent_access(enable: bool) -> Result<AgentServerStatus, String> {
+    let mut central = mcp::read_central()?;
+    if enable {
+        let path = sidecar_path()
+            .ok_or("aide-mcp binary not found next to the running app")?;
+        central.servers.insert(
+            AGENT_SERVER_NAME.to_string(),
+            mcp::McpServerConfig {
+                command: Some(path.to_string_lossy().to_string()),
+                args: None,
+                url: None,
+                env: None,
+                headers: None,
+                disabled: Some(false),
+                description: Some(
+                    "aide agent access: install, update and publish skills".into(),
+                ),
+                targets: vec![],
+            },
+        );
+    } else {
+        central.servers.remove(AGENT_SERVER_NAME);
+    }
+    mcp::save_central(&central)?;
+    Ok(get_agent_server())
 }
 
 #[tauri::command]
@@ -625,7 +719,7 @@ fn tool_dir_exists(relative: &str) -> bool {
     home.join(relative).exists()
 }
 
-fn resolve_skills_source() -> Result<std::path::PathBuf, String> {
+pub fn resolve_skills_source() -> Result<std::path::PathBuf, String> {
     dirs::home_dir()
         .map(|h| h.join(".agents").join("skills"))
         .ok_or_else(|| "Cannot find home directory".to_string())
@@ -1021,6 +1115,10 @@ pub fn run() {
             sync_mcp_all,
             import_mcp_all,
             check_sync_statuses,
+            check_skill_updates,
+            update_skill,
+            get_agent_server,
+            enable_agent_access,
             sync_tool,
             sync_all_tools,
             list_skills,

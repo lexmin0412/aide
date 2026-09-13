@@ -56,6 +56,20 @@ export interface GitPullResult {
   updated: string[]
 }
 
+export interface SkillUpdateInfo {
+  skill: string
+  id: string
+  source: string
+  installed_commit: string
+  latest_commit: string
+}
+
+export interface AgentServerStatus {
+  enabled: boolean
+  binary_available: boolean
+  command: string | null
+}
+
 export interface ToolInfo {
   key: string
   name: string

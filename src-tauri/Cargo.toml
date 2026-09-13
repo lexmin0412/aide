@@ -1,6 +1,7 @@
 [package]
 name = "aide"
 version = "0.2.0"
+default-run = "aide"
 description = "AI development environment config manager"
 authors = ["you"]
 edition = "2021"

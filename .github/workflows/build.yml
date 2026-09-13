@@ -44,6 +44,16 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      - name: Build aide-mcp sidecar
+        shell: bash
+        run: |
+          TRIPLE=$(rustc -vV | sed -n 's/host: //p')
+          cargo build --release --bin aide-mcp --manifest-path src-tauri/Cargo.toml
+          mkdir -p src-tauri/binaries
+          EXT=""
+          if [ "$RUNNER_OS" = "Windows" ]; then EXT=".exe"; fi
+          cp "src-tauri/target/release/aide-mcp$EXT" "src-tauri/binaries/aide-mcp-$TRIPLE$EXT"
+
       - run: pnpm tauri build
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}

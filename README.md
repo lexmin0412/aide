@@ -1,8 +1,10 @@
 # aide
 
+[简体中文](./README.zh-CN.md) | English
+
 AI Development Environment config manager.
 
-A unified hub for managing cross-agent AI configurations — Skills, MCP, and model configs — with multi-agent compatibility (Claude Code, OpenCode, Cursor, Codex, Warp, GitHub Copilot, Trae, VS Code, MiMo Code).
+A unified hub for managing cross-agent AI configurations — Skills, MCP, and model configs — with multi-agent compatibility (Claude Code, OpenCode, Cursor, Codex, Gemini CLI, Windsurf, Zed, Cline, Roo Code, Kilo Code, Goose, Warp, GitHub Copilot, Trae, Qwen Code, iFlow CLI, Kimi Code, MiniMax Code, CodeBuddy, Qoder, Lingma, MiMo Code, and more).
 
 ## Features
 
