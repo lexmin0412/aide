@@ -1,5 +1,6 @@
-import { useState, useRef, useEffect, useMemo, useCallback } from "react"
+import { useState, useRef, useMemo, useCallback } from "react"
 import { invoke } from "@tauri-apps/api/core"
+import { toast } from "@/lib/toast"
 
 interface TagEditorProps {
   path: string
@@ -14,20 +15,9 @@ export function TagEditor({ path, initialTags, allTags, onSave, onClose }: TagEd
   const [input, setInput] = useState("")
   const [saving, setSaving] = useState(false)
   const [focusIndex, setFocusIndex] = useState(0)
-  const ref = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const tagsRef = useRef(tags)
   tagsRef.current = tags
-
-  useEffect(() => {
-    const handler = (e: PointerEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        onClose()
-      }
-    }
-    document.addEventListener("pointerdown", handler, true)
-    return () => document.removeEventListener("pointerdown", handler, true)
-  }, [onClose])
 
   const suggestions = useMemo(() => {
     if (!input.trim()) return []
@@ -36,10 +26,6 @@ export function TagEditor({ path, initialTags, allTags, onSave, onClose }: TagEd
       .filter((t) => t.toLowerCase().includes(q) && !tags.includes(t))
       .slice(0, 8)
   }, [input, allTags, tags])
-
-  useEffect(() => {
-    setFocusIndex(0)
-  }, [suggestions.length])
 
   const addTag = useCallback((tag?: string) => {
     const t = (tag || inputRef.current?.value || "").trim()
@@ -76,9 +62,9 @@ export function TagEditor({ path, initialTags, allTags, onSave, onClose }: TagEd
       return
     }
     if (e.key === "Backspace" && !val && currentTags.length > 0) {
-      return
+      removeTag(currentTags[currentTags.length - 1])
     }
-  }, [suggestions, focusIndex, addTag])
+  }, [suggestions, focusIndex, addTag, removeTag])
 
   const handleSave = useCallback(async () => {
     setSaving(true)
@@ -87,18 +73,14 @@ export function TagEditor({ path, initialTags, allTags, onSave, onClose }: TagEd
       onSave(tags)
       onClose()
     } catch (e) {
-      console.error("Failed to save tags:", e)
+      toast(`Failed to save tags: ${e}`, "error")
     } finally {
       setSaving(false)
     }
   }, [path, tags, onSave, onClose])
 
   return (
-    <div
-      ref={ref}
-      className="absolute z-50 top-full right-0 mt-1 w-72 bg-popover border border-border rounded-lg shadow-xl p-3"
-      onClick={(e) => e.stopPropagation()}
-    >
+    <div className="p-2" onClick={(e) => e.stopPropagation()}>
       <div className="flex flex-wrap gap-1.5 min-h-[28px] mb-2">
         {tags.map((t) => (
           <span
@@ -114,6 +96,9 @@ export function TagEditor({ path, initialTags, allTags, onSave, onClose }: TagEd
             </button>
           </span>
         ))}
+        {tags.length === 0 && (
+          <span className="text-[11px] text-muted-foreground/60">No tags yet</span>
+        )}
       </div>
       <div className="relative mb-3">
         <input
@@ -122,7 +107,7 @@ export function TagEditor({ path, initialTags, allTags, onSave, onClose }: TagEd
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder="Add tag..."
-          className="h-7 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 text-xs transition-colors outline-none file:inline-flex file:h-6 file:border-0 file:bg-transparent file:text-sm file:font-medium file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30"
+          className="h-7 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 text-xs transition-colors outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30"
         />
         {suggestions.length > 0 && (
           <div className="absolute left-0 right-0 top-full mt-0.5 bg-popover border border-border rounded-md shadow-lg overflow-hidden z-50">
@@ -151,7 +136,7 @@ export function TagEditor({ path, initialTags, allTags, onSave, onClose }: TagEd
         <button
           onClick={handleSave}
           disabled={saving}
-          className="px-3 py-1 text-xs bg-foreground text-background rounded-md hover:opacity-90 disabled:opacity-50"
+          className="px-3 py-1 text-xs bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50"
         >
           {saving ? "Saving..." : "Save"}
         </button>

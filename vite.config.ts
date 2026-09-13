@@ -18,16 +18,18 @@ export default defineConfig(() => ({
   clearScreen: false,
   // 2. tauri expects a fixed port, fail if that port is not available
   server: {
+    // Bind the loopback IP explicitly: on machines where a proxy resolves
+    // "localhost" to a fake IP, the default hostname binding fails.
     port: 1430,
     strictPort: true,
-    host: host || false,
+    host: host || "127.0.0.1",
     hmr: host
       ? {
           protocol: "ws",
           host,
           port: 1431,
         }
-      : undefined,
+      : { protocol: "ws", host: "127.0.0.1", port: 1431 },
     watch: {
       // 3. tell Vite to ignore watching `src-tauri`
       ignored: ["**/src-tauri/**"],

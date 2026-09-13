@@ -14,6 +14,8 @@ export interface EditorTab {
   is_dirty: boolean
   language: string
   is_image?: boolean
+  /** File modification time (unix seconds) at last read/save, used to skip redundant reloads. */
+  mtime?: number
 }
 
 export interface SkillInfo {
@@ -25,6 +27,33 @@ export interface SkillInfo {
   is_symlink: boolean
   target_path: string | null
   file_count: number
+  /** Install provenance, e.g. "owner/repo" from the skills registry. */
+  source?: string | null
+  /** Explicitly assigned git scope; None means the default scope applies. */
+  scope?: string | null
+}
+
+export interface GitRemoteInfo {
+  name: string
+  url: string
+  branch: string
+  is_default: boolean
+}
+
+export interface GitRemotesConfig {
+  remotes: GitRemoteInfo[]
+  skill_scopes: Record<string, string>
+}
+
+export interface GitPublishResult {
+  committed: boolean
+  pushed: boolean
+  skills: string[]
+  message: string
+}
+
+export interface GitPullResult {
+  updated: string[]
 }
 
 export interface ToolInfo {

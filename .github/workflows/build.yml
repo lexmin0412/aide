@@ -10,7 +10,17 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            name: aide-macos
+          - os: ubuntu-22.04
+            name: aide-linux
+          - os: windows-latest
+            name: aide-windows
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -26,6 +36,12 @@ jobs:
 
       - uses: actions-rust-lang/setup-rust-toolchain@v1
 
+      - name: Install Linux system dependencies
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
       - run: pnpm install --frozen-lockfile
 
       - run: pnpm tauri build
@@ -33,61 +49,88 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
-      - name: Zip .app bundle
+      - name: Collect release files (macOS)
+        if: matrix.os == 'macos-latest'
         run: |
-          cd src-tauri/target/release/bundle/macos
-          zip -r aide.zip aide.app
-          mv aide.zip ../../../../../aide.app.zip
+          mkdir -p release-files
+          BUNDLE=src-tauri/target/release/bundle
+          cd "$BUNDLE/macos"
+          zip -r aide.app.zip aide.app
+          mv aide.app.zip "$GITHUB_WORKSPACE/release-files/"
+          cp "$BUNDLE"/dmg/*.dmg "$GITHUB_WORKSPACE/release-files/"
+          cp "$BUNDLE"/macos/*.tar.gz "$GITHUB_WORKSPACE/release-files/"
+          cp "$BUNDLE"/macos/*.tar.gz.sig "$GITHUB_WORKSPACE/release-files/"
 
-      - name: Prepare updater artifacts
+      - name: Collect release files (Linux)
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          mkdir -p release-files
+          BUNDLE=src-tauri/target/release/bundle
+          cp "$BUNDLE"/appimage/*.AppImage "$GITHUB_WORKSPACE/release-files/" 2>/dev/null || true
+          cp "$BUNDLE"/appimage/*.AppImage.sig "$GITHUB_WORKSPACE/release-files/" 2>/dev/null || true
+          cp "$BUNDLE"/deb/*.deb "$GITHUB_WORKSPACE/release-files/" 2>/dev/null || true
+          cp "$BUNDLE"/rpm/*.rpm "$GITHUB_WORKSPACE/release-files/" 2>/dev/null || true
+
+      - name: Collect release files (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          mkdir -p release-files
+          BUNDLE=src-tauri/target/release/bundle
+          cp "$BUNDLE"/nsis/*.exe "$GITHUB_WORKSPACE/release-files/" 2>/dev/null || true
+          cp "$BUNDLE"/nsis/*.exe.sig "$GITHUB_WORKSPACE/release-files/" 2>/dev/null || true
+          cp "$BUNDLE"/msi/*.msi "$GITHUB_WORKSPACE/release-files/" 2>/dev/null || true
+          cp "$BUNDLE"/msi/*.msi.sig "$GITHUB_WORKSPACE/release-files/" 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: release-files/*
+          retention-days: 90
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: aide-*
+          merge-multiple: true
+          path: dist
+
+      - name: Prepare updater manifest
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           TAG="${GITHUB_REF_NAME}"
-          MACOS_DIR="src-tauri/target/release/bundle/macos"
-          TAR_GZ=$(ls "$MACOS_DIR"/*.tar.gz 2>/dev/null | head -1)
-          SIG=$(ls "$MACOS_DIR"/*.tar.gz.sig 2>/dev/null | head -1)
-
-          if [ -n "$TAR_GZ" ] && [ -n "$SIG" ]; then
-            SIGNATURE=$(cat "$SIG")
-            jq -n \
-              --arg version "$VERSION" \
-              --rawfile notes .release-notes.md \
-              --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-              --arg sig "$SIGNATURE" \
-              --arg url "https://github.com/lexmin0412/aide/releases/download/${TAG}/$(basename $TAR_GZ)" \
-              '{
-                version: $version,
-                notes: $notes | rtrimstr("\n"),
-                pub_date: $pub_date,
-                platforms: {
-                  "darwin-aarch64": {
-                    signature: $sig,
-                    url: $url
-                  }
-                }
-              }' > "$MACOS_DIR/latest.json"
-          fi
+          BASE="https://github.com/lexmin0412/aide/releases/download/${TAG}"
+          cd dist
+          platforms='{}'
+          add_platform() {
+            local key="$1" file="$2" sig="$3"
+            if [ -f "$file" ] && [ -f "$sig" ]; then
+              platforms=$(jq --arg k "$key" --arg url "$BASE/$(basename "$file")" --rawfile sig "$sig" \
+                '. + {($k): {signature: $sig, url: $url}}' <<<"$platforms")
+            fi
+          }
+          add_platform "darwin-aarch64" "aide.app.tar.gz" "aide.app.tar.gz.sig"
+          add_platform "windows-x86_64" "$(ls aide_*_x64-setup.exe 2>/dev/null | head -1)" "$(ls aide_*_x64-setup.exe.sig 2>/dev/null | head -1)"
+          add_platform "linux-x86_64" "$(ls aide_*_amd64.AppImage 2>/dev/null | head -1)" "$(ls aide_*_amd64.AppImage.sig 2>/dev/null | head -1)"
+          jq -n \
+            --arg version "$VERSION" \
+            --rawfile notes ../.release-notes.md \
+            --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --argjson platforms "$platforms" \
+            '{version: $version, notes: $notes | rtrimstr("\n"), pub_date: $pub_date, platforms: $platforms}' \
+            > latest.json
+          cat latest.json
 
       - name: Create GitHub Release
         run: |
           gh release create "${GITHUB_REF_NAME}" \
             --title "${GITHUB_REF_NAME}" \
             --notes-file .release-notes.md \
-            src-tauri/target/release/bundle/dmg/*.dmg \
-            aide.app.zip \
-            src-tauri/target/release/bundle/macos/*.tar.gz \
-            src-tauri/target/release/bundle/macos/*.tar.gz.sig \
-            src-tauri/target/release/bundle/macos/latest.json
+            dist/*
         env:
           GH_TOKEN: ${{ github.token }}
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: aide-macos
-          path: |
-            src-tauri/target/release/bundle/dmg/*.dmg
-            aide.app.zip
-            src-tauri/target/release/bundle/macos/*.tar.gz
-            src-tauri/target/release/bundle/macos/*.tar.gz.sig
-            src-tauri/target/release/bundle/macos/latest.json
-          retention-days: 90

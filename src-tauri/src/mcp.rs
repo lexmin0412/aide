@@ -24,9 +24,10 @@ pub enum McpFormat {
 }
 
 impl McpAdapter {
-    fn resolve_path(&self) -> PathBuf {
-        let home = dirs::home_dir().expect("home dir");
-        home.join(self.config_path)
+    fn resolve_path(&self) -> Result<PathBuf, String> {
+        dirs::home_dir()
+            .map(|h| h.join(self.config_path))
+            .ok_or_else(|| "Cannot find home directory".to_string())
     }
 }
 
@@ -77,13 +78,14 @@ impl Default for McpCentralConfig {
     }
 }
 
-fn central_path() -> PathBuf {
-    let home = dirs::home_dir().expect("home dir");
-    home.join(".aide").join("mcp.json")
+fn central_path() -> Result<PathBuf, String> {
+    dirs::home_dir()
+        .map(|h| h.join(".aide").join("mcp.json"))
+        .ok_or_else(|| "Cannot find home directory".to_string())
 }
 
 pub fn read_central() -> Result<McpCentralConfig, String> {
-    let path = central_path();
+    let path = central_path()?;
     if !path.exists() {
         return Ok(McpCentralConfig::default());
     }
@@ -92,7 +94,7 @@ pub fn read_central() -> Result<McpCentralConfig, String> {
 }
 
 pub fn save_central(config: &McpCentralConfig) -> Result<(), String> {
-    let path = central_path();
+    let path = central_path()?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -103,7 +105,7 @@ pub fn save_central(config: &McpCentralConfig) -> Result<(), String> {
 // ── Sync ──
 
 pub fn sync_to_tool(adapter: &McpAdapter, central: &McpCentralConfig) -> Result<SyncMcpResult, String> {
-    let config_path = adapter.resolve_path();
+    let config_path = adapter.resolve_path()?;
     let enabled_servers: HashMap<&String, &McpServerConfig> = central
         .servers
         .iter()
@@ -176,6 +178,19 @@ pub fn sync_to_tool(adapter: &McpAdapter, central: &McpCentralConfig) -> Result<
     }
 }
 
+/// Upsert entries from `source` into the object `target`, preserving entries
+/// that only exist on the tool side (added outside aide).
+fn merge_server_map(target: &mut serde_json::Value, source: &serde_json::Value) {
+    if !target.is_object() {
+        *target = serde_json::Value::Object(serde_json::Map::new());
+    }
+    if let (Some(dst), Some(src)) = (target.as_object_mut(), source.as_object()) {
+        for (name, cfg) in src {
+            dst.insert(name.clone(), cfg.clone());
+        }
+    }
+}
+
 fn sync_json(adapter: &McpAdapter, path: &Path, mcp_value: &serde_json::Value) -> Result<SyncMcpResult, String> {
     let mut root: serde_json::Value = if path.exists() {
         let content = strip_jsonc_comments(&fs::read_to_string(path).map_err(|e| e.to_string())?);
@@ -185,10 +200,19 @@ fn sync_json(adapter: &McpAdapter, path: &Path, mcp_value: &serde_json::Value) -
     };
 
     if adapter.mcp_key.is_empty() {
-        // Root object IS the MCP servers (e.g. standalone mcp.json)
-        root = mcp_value.clone();
+        // Root object IS the MCP servers (e.g. standalone mcp.json).
+        merge_server_map(&mut root, mcp_value);
     } else {
-        root[&adapter.mcp_key] = mcp_value.clone();
+        if !root.is_object() {
+            root = serde_json::Value::Object(serde_json::Map::new());
+        }
+        let existing = root
+            .get(&adapter.mcp_key)
+            .cloned()
+            .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+        let mut merged = existing;
+        merge_server_map(&mut merged, mcp_value);
+        root[&adapter.mcp_key] = merged;
     }
 
     if let Some(parent) = path.parent() {
@@ -201,77 +225,66 @@ fn sync_json(adapter: &McpAdapter, path: &Path, mcp_value: &serde_json::Value) -
     Ok(SyncMcpResult { skipped: false, message: format!("Synced {} server(s)", count) })
 }
 
+fn json_to_toml_value(value: &serde_json::Value) -> toml::Value {
+    match value {
+        serde_json::Value::Null => toml::Value::String(String::new()),
+        serde_json::Value::Bool(b) => toml::Value::Boolean(*b),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                toml::Value::Integer(i)
+            } else {
+                toml::Value::Float(n.as_f64().unwrap_or(0.0))
+            }
+        }
+        serde_json::Value::String(s) => toml::Value::String(s.clone()),
+        serde_json::Value::Array(arr) => {
+            toml::Value::Array(arr.iter().map(json_to_toml_value).collect())
+        }
+        serde_json::Value::Object(obj) => toml::Value::Table(
+            obj.iter()
+                .map(|(k, v)| (k.clone(), json_to_toml_value(v)))
+                .collect(),
+        ),
+    }
+}
+
 fn sync_toml(adapter: &McpAdapter, path: &Path, mcp_value: &serde_json::Value) -> Result<SyncMcpResult, String> {
-    let mcp_key = &adapter.mcp_key;
-    let mut content = if path.exists() {
-        fs::read_to_string(path).map_err(|e| e.to_string())?
+    let mcp_key = adapter.mcp_key.to_string();
+    let mut table: toml::Table = if path.exists() {
+        fs::read_to_string(path)
+            .map_err(|e| e.to_string())?
+            .parse()
+            .unwrap_or_default()
     } else {
-        String::new()
+        toml::Table::new()
     };
 
-    let toml_str = json_value_to_toml_table(mcp_value, mcp_key);
-
-    // Find and replace the mcp_servers section, or append
-    if content.contains(&format!("[{}]", mcp_key)) {
-        // Simple approach: rebuild entire file
-        let existing: toml::Value = content.parse().unwrap_or(toml::Value::Table(toml::value::Table::new()));
-        let mut table = existing.as_table().cloned().unwrap_or_default();
-        // Remove old mcp_servers entries
-        let key = mcp_key.to_string();
-        table.remove(&key);
-        // Parse new entries and insert
-        let new_table: toml::Value = toml_str.parse().map_err(|e| format!("toml parse error: {}", e))?;
-        if let Some(new_val) = new_table.get(mcp_key) {
-            table.insert(mcp_key.to_string(), new_val.clone());
+    // Upsert central servers into the tool's section, preserving entries that
+    // only exist on the tool side.
+    let mut section = table
+        .get(mcp_key.as_str())
+        .and_then(|v| v.as_table())
+        .cloned()
+        .unwrap_or_default();
+    if let Some(servers) = mcp_value.as_object() {
+        for (name, server) in servers {
+            section.insert(name.clone(), json_to_toml_value(server));
         }
-        let new_content = toml::to_string_pretty(&toml::Value::Table(table)).map_err(|e| e.to_string())?;
-        content = new_content;
-    } else {
-        // Append section
-        content.push_str(&format!("\n{}", toml_str));
     }
+    table.insert(mcp_key, toml::Value::Table(section));
 
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    fs::write(path, &content).map_err(|e| e.to_string())?;
+    let content = toml::to_string_pretty(&toml::Value::Table(table)).map_err(|e| e.to_string())?;
+    fs::write(path, content).map_err(|e| e.to_string())?;
 
     let count = mcp_value.as_object().map(|o| o.len()).unwrap_or(0);
     Ok(SyncMcpResult { skipped: false, message: format!("Synced {} server(s)", count) })
 }
 
-fn json_value_to_toml_table(value: &serde_json::Value, root_key: &str) -> String {
-    use std::fmt::Write;
-    let mut out = String::new();
-    if let Some(obj) = value.as_object() {
-        for (name, server) in obj {
-            let _ = writeln!(out, "[{}.{}]", root_key, name);
-            if let Some(obj) = server.as_object() {
-                for (k, v) in obj {
-                    match v {
-                        serde_json::Value::String(s) => {
-                            if s.contains(' ') || s.contains('#') {
-                                let _ = writeln!(out, "{} = \"{}\"", k, s);
-                            } else {
-                                let _ = writeln!(out, "{} = {}", k, s);
-                            }
-                        }
-                        serde_json::Value::Array(arr) => {
-                            let items: Vec<String> = arr.iter().filter_map(|a| a.as_str().map(|s| format!("\"{}\"", s))).collect();
-                            let _ = writeln!(out, "{} = [{}]", k, items.join(", "));
-                        }
-                        serde_json::Value::Bool(b) => { let _ = writeln!(out, "{} = {}", k, b); }
-                        _ => {}
-                    }
-                }
-            }
-        }
-    }
-    out
-}
-
 pub fn import_from_adapter(adapter: &McpAdapter, central: &mut McpCentralConfig) -> Result<ImportMcpResult, String> {
-    let config_path = adapter.resolve_path();
+    let config_path = adapter.resolve_path()?;
     if !config_path.exists() {
         return Ok(ImportMcpResult { imported: vec![], skipped: vec![], source: adapter.name.to_string() });
     }
@@ -408,4 +421,143 @@ fn strip_jsonc_comments(input: &str) -> String {
 pub struct SyncMcpResult {
     pub skipped: bool,
     pub message: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "aide-mcp-test-{}-{}",
+            name,
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn strip_jsonc_removes_comments_but_keeps_strings() {
+        let input = r#"{
+            // line comment
+            /* block
+               comment */
+            "url": "https://example.com/a//b",
+            "name": "x /* not a comment */"
+        }"#;
+        let out = strip_jsonc_comments(input);
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["url"], "https://example.com/a//b");
+        assert_eq!(parsed["name"], "x /* not a comment */");
+    }
+
+    #[test]
+    fn sync_json_upserts_and_preserves_tool_only_servers() {
+        let dir = temp_dir("sync_json");
+        let path = dir.join("mcp.json");
+        fs::write(&path, r#"{"mcpServers": {"toolOnly": {"command": "foo"}}}"#).unwrap();
+
+        let adapter = McpAdapter {
+            key: "test",
+            name: "Test",
+            config_path: "unused",
+            mcp_key: "mcpServers",
+            format: McpFormat::Json,
+        };
+        let mcp_value = serde_json::json!({ "central": { "command": "bar" } });
+        let result = sync_json(&adapter, &path, &mcp_value).unwrap();
+        assert!(!result.skipped);
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(parsed["mcpServers"]["central"]["command"], "bar");
+        assert_eq!(parsed["mcpServers"]["toolOnly"]["command"], "foo");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sync_json_root_level_merges_instead_of_replacing() {
+        let dir = temp_dir("sync_json_root");
+        let path = dir.join("mcp.json");
+        fs::write(&path, r#"{"toolOnly": {"command": "foo"}}"#).unwrap();
+
+        let adapter = McpAdapter {
+            key: "warp",
+            name: "Warp",
+            config_path: "unused",
+            mcp_key: "",
+            format: McpFormat::Json,
+        };
+        let mcp_value = serde_json::json!({ "central": { "command": "bar" } });
+        sync_json(&adapter, &path, &mcp_value).unwrap();
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(parsed["toolOnly"]["command"], "foo");
+        assert_eq!(parsed["central"]["command"], "bar");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sync_toml_writes_valid_toml_and_preserves_other_sections() {
+        let dir = temp_dir("sync_toml");
+        let path = dir.join("config.toml");
+        fs::write(
+            &path,
+            "[other]\nkey = 1\n\n[mcp_servers.toolOnly]\ncommand = \"foo\"\n",
+        )
+        .unwrap();
+
+        let adapter = McpAdapter {
+            key: "codex",
+            name: "Codex",
+            config_path: "unused",
+            mcp_key: "mcp_servers",
+            format: McpFormat::Toml,
+        };
+        let mcp_value = serde_json::json!({
+            "central": { "command": "npx", "args": ["-y", "pkg"], "enabled": true }
+        });
+        let result = sync_toml(&adapter, &path, &mcp_value).unwrap();
+        assert!(!result.skipped);
+
+        let parsed: toml::Table = fs::read_to_string(&path).unwrap().parse().unwrap();
+        assert_eq!(parsed["other"]["key"].as_integer(), Some(1));
+        assert_eq!(
+            parsed["mcp_servers"]["central"]["command"].as_str(),
+            Some("npx")
+        );
+        assert_eq!(
+            parsed["mcp_servers"]["central"]["args"][0].as_str(),
+            Some("-y")
+        );
+        assert_eq!(parsed["mcp_servers"]["central"]["enabled"].as_bool(), Some(true));
+        assert_eq!(
+            parsed["mcp_servers"]["toolOnly"]["command"].as_str(),
+            Some("foo")
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn json_to_toml_value_converts_nested_types() {
+        let json = serde_json::json!({
+            "cmd": "server",
+            "count": 3,
+            "ratio": 0.5,
+            "on": true,
+            "list": ["a", "b"],
+            "nested": { "k": "v" }
+        });
+        let toml_value = json_to_toml_value(&json);
+        let table = toml_value.as_table().unwrap();
+        assert_eq!(table["cmd"].as_str(), Some("server"));
+        assert_eq!(table["count"].as_integer(), Some(3));
+        assert_eq!(table["ratio"].as_float(), Some(0.5));
+        assert_eq!(table["on"].as_bool(), Some(true));
+        assert_eq!(table["list"].as_array().unwrap().len(), 2);
+        assert_eq!(table["nested"]["k"].as_str(), Some("v"));
+    }
 }

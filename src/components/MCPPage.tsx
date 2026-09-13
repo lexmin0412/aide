@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ask } from "@tauri-apps/plugin-dialog";
 import { Power, PowerOff, Pencil, Trash2, XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -9,6 +8,8 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
+import { toast } from "@/lib/toast";
+import { CardGridSkeleton } from "./Skeleton";
 import {
   Select,
   SelectContent,
@@ -21,6 +22,8 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
+  DialogFooter,
 } from "@/components/ui/dialog";
 
 interface McpServer {
@@ -45,10 +48,12 @@ type AddMode = "form" | "json";
 export default function MCPPage() {
   const [servers, setServers] = useState<McpServer[]>([]);
   const [tools, setTools] = useState<ToolOption[]>([]);
+  const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<McpServer | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [addMode, setAddMode] = useState<AddMode>("form");
   const [syncing, setSyncing] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 
   const load = async () => {
     const [s, t] = await Promise.all([
@@ -59,21 +64,26 @@ export default function MCPPage() {
     setTools(t);
   };
   useEffect(() => {
-    load();
+    load()
+      .catch((e) => console.error("Failed to load MCP servers:", e))
+      .finally(() => setLoading(false));
   }, []);
 
   const save = async (updated: McpServer[]) => {
-    await invoke("save_mcp_servers", { servers: updated });
-    setServers(updated);
-    setShowAdd(false);
-    setEditing(null);
+    try {
+      await invoke("save_mcp_servers", { servers: updated });
+      setServers(updated);
+      setShowAdd(false);
+      setEditing(null);
+      toast("MCP servers saved", "success");
+    } catch (e) {
+      toast(`Failed to save MCP servers: ${e}`, "error");
+    }
   };
   const remove = async (name: string) => {
-    const confirmed = await ask(
-      `Delete server "${name}"? This cannot be undone.`,
-      { title: "Delete Server", kind: "warning" }
-    );
-    if (confirmed) save(servers.filter((s) => s.name !== name));
+    setDeleteTarget(null);
+    await save(servers.filter((s) => s.name !== name));
+    toast(`Server "${name}" deleted`, "success");
   };
   const toggle = (name: string) =>
     save(
@@ -85,9 +95,16 @@ export default function MCPPage() {
   const syncTool = async (key: string) => {
     setSyncing(key);
     try {
-      const r = await invoke<any>("sync_mcp_tool", { toolKey: key });
+      const r = await invoke<{ skipped: boolean; message: string }>("sync_mcp_tool", { toolKey: key });
+      const toolName = tools.find((t) => t.key === key)?.name ?? key;
+      if (r.skipped) {
+        toast(`${toolName}: ${r.message}`, "info");
+      } else {
+        toast(`${toolName}: ${r.message}`, "success");
+      }
       return r;
     } catch (e) {
+      toast(`Sync to ${key} failed: ${e}`, "error");
       return { skipped: true, message: String(e) };
     } finally {
       setSyncing(null);
@@ -99,14 +116,9 @@ export default function MCPPage() {
         syncTool(t.key).catch(() => ({ skipped: true, message: "error" }))
       )
     );
-    alert(
-      results
-        .map(
-          (r, i) =>
-            `${tools[i].name}: ${r.skipped ? "SKIPPED" : "OK"} - ${r.message}`
-        )
-        .join("\n")
-    );
+    const ok = results.filter((r) => !r.skipped).length;
+    const skipped = results.length - ok;
+    toast(`Sync finished: ${ok} tool${ok !== 1 ? "s" : ""} updated, ${skipped} skipped`, ok > 0 ? "success" : "info");
   };
 
 
@@ -125,24 +137,20 @@ export default function MCPPage() {
             size="sm"
             onClick={async () => {
               try {
-                const results = await invoke<any[]>("import_mcp_all");
+                const results = await invoke<{ source: string; imported: string[] }[]>("import_mcp_all");
                 const total = results.reduce(
-                  (n: number, r: any) => n + r.imported.length,
+                  (n: number, r) => n + r.imported.length,
                   0
                 );
                 if (total > 0) load();
-                alert(
-                  results.length > 0
-                    ? results
-                        .map(
-                          (r: any) =>
-                            `${r.source}: ${r.imported.length} imported`
-                        )
-                        .join("\n")
-                    : "No MCP configs found"
+                toast(
+                  total > 0
+                    ? results.map((r) => `${r.source}: ${r.imported.length} imported`).join("\n")
+                    : "No MCP configs found",
+                  total > 0 ? "success" : "info"
                 );
               } catch (e) {
-                alert("Scan failed: " + e);
+                toast(`Scan failed: ${e}`, "error");
               }
             }}
           >
@@ -181,7 +189,9 @@ export default function MCPPage() {
       </div>
 
       <div className="flex-1 overflow-y-auto p-6">
-        {servers.length === 0 ? (
+        {loading ? (
+          <CardGridSkeleton count={3} />
+        ) : servers.length === 0 ? (
           <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
             No MCP servers configured.
           </div>
@@ -233,7 +243,7 @@ export default function MCPPage() {
                       variant="ghost"
                       size="icon"
                       className="h-7 w-7 text-destructive hover:text-destructive"
-                      onClick={() => remove(s.name)}
+                      onClick={() => setDeleteTarget(s.name)}
                     >
                       <Trash2 className="size-3" />
                     </Button>
@@ -256,11 +266,15 @@ export default function MCPPage() {
                     </code>
                   )}
                 </div>
-                <div className="flex items-center gap-2 text-[11px] text-muted-foreground/80">
-                  {s.targets.length > 0 && (
-                    <span className="text-blue-400">
-                      {s.targets.length} target{s.targets.length > 1 ? "s" : ""}
-                    </span>
+                <div className="flex flex-wrap items-center gap-1 text-[11px] text-muted-foreground/80">
+                  {s.targets.length > 0 ? (
+                    s.targets.map((key) => (
+                      <Badge key={key} variant="outline" className="text-[9px] px-1 py-0">
+                        {tools.find((t) => t.key === key)?.name ?? key}
+                      </Badge>
+                    ))
+                  ) : (
+                    <span className="text-primary font-medium">All tools</span>
                   )}
                   {s.env && Object.keys(s.env).length > 0 && (
                     <span>{Object.keys(s.env).length} env</span>
@@ -271,6 +285,23 @@ export default function MCPPage() {
           </div>
         )}
       </div>
+
+      {deleteTarget && (
+        <Dialog open onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}>
+          <DialogContent className="sm:max-w-[400px]">
+            <DialogHeader>
+              <DialogTitle>Delete Server</DialogTitle>
+              <DialogDescription>
+                Delete server <span className="font-mono text-foreground">{deleteTarget}</span>? This cannot be undone.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="ghost" size="sm" onClick={() => setDeleteTarget(null)}>Cancel</Button>
+              <Button variant="destructive" size="sm" onClick={() => void remove(deleteTarget)}>Delete</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
 
       {showAdd && (
         <AddServerDialog

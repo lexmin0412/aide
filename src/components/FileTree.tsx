@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback, useImperativeHandle, forwardRef, useRef } from "react"
+import { useState, useEffect, useCallback, useImperativeHandle, forwardRef, useRef, useMemo } from "react"
 import { invoke } from "@tauri-apps/api/core"
-import { FileText, Folder, FolderOpen, Pencil, Trash2, FilePlus, FolderPlus } from "lucide-react"
+import { revealItemInDir } from "@tauri-apps/plugin-opener"
+import { FileText, Folder, FolderOpen, Pencil, Trash2, FilePlus, FolderPlus, ExternalLink } from "lucide-react"
 import {
   Dialog,
   DialogContent,
@@ -11,6 +12,7 @@ import {
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { toast } from "@/lib/toast"
 import type { FileEntry } from "../types"
 
 interface FileTreeProps {
@@ -50,6 +52,58 @@ interface EditingState {
   originalPath?: string
 }
 
+/** Single inline text input used for rename and create, with local value state
+ * so keystrokes do not re-render the whole tree. */
+function InlineEditInput({
+  initialValue,
+  rename,
+  placeholder,
+  className,
+  onCommit,
+  onCancel,
+}: {
+  initialValue: string
+  rename?: boolean
+  placeholder?: string
+  className?: string
+  onCommit: (name: string) => void
+  onCancel: () => void
+}) {
+  const inputRef = useRef<HTMLInputElement>(null)
+  const [val, setVal] = useState(initialValue)
+
+  useEffect(() => {
+    const el = inputRef.current
+    if (!el) return
+    el.focus()
+    if (rename) {
+      const dotIndex = initialValue.lastIndexOf(".")
+      if (dotIndex > 0) el.setSelectionRange(0, dotIndex)
+      else el.select()
+    } else {
+      el.select()
+    }
+    // Run once on mount; initialValue is fixed for the lifetime of the editor.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  return (
+    <Input
+      ref={inputRef}
+      value={val}
+      onChange={(e) => setVal(e.target.value)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") { e.preventDefault(); onCommit(val.trim()) }
+        if (e.key === "Escape") { e.preventDefault(); onCancel() }
+      }}
+      onBlur={onCancel}
+      className={className}
+      placeholder={placeholder}
+      onClick={(e) => e.stopPropagation()}
+    />
+  )
+}
+
 export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileTree(
   { rootPath, onSelectFile, selectedPath, onFileDeleted, onFileRenamed },
   ref
@@ -59,7 +113,8 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [editing, setEditing] = useState<EditingState | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<FileEntry | null>(null)
-  const editInputRef = useRef<HTMLInputElement>(null)
+  const [keyIndex, setKeyIndex] = useState(-1)
+  const containerRef = useRef<HTMLDivElement>(null)
 
   const loadDir = useCallback(async (path: string) => {
     const entries = await invoke<FileEntry[]>("list_directory", { path })
@@ -68,10 +123,7 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
   }, [])
 
   const refresh = useCallback(async () => {
-    await loadDir(rootPath)
-    for (const dirPath of expandedDirs) {
-      await loadDir(dirPath)
-    }
+    await Promise.all([rootPath, ...expandedDirs].map((dir) => loadDir(dir)))
   }, [rootPath, expandedDirs, loadDir])
 
   const toggleDir = useCallback(
@@ -88,22 +140,9 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
   )
 
   useEffect(() => {
-    setDirChildren({}); setExpandedDirs(new Set())
+    setDirChildren({}); setExpandedDirs(new Set()); setKeyIndex(-1)
     loadDir(rootPath)
   }, [rootPath])
-
-  useEffect(() => {
-    if (editing && editInputRef.current) {
-      editInputRef.current.focus()
-      if (editing.type === "rename") {
-        const dotIndex = editing.value.lastIndexOf(".")
-        if (dotIndex > 0) editInputRef.current.setSelectionRange(0, dotIndex)
-        else editInputRef.current.select()
-      } else {
-        editInputRef.current.select()
-      }
-    }
-  }, [editing])
 
   const menuRef = useRef<HTMLDivElement>(null)
 
@@ -123,52 +162,47 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
     }
   }, [contextMenu])
 
-  const commitRename = useCallback(async () => {
-    if (!editing || editing.type !== "rename" || !editing.originalPath) return
-    const parentDir = editing.parentDir
-    const newPath = parentDir + "/" + editing.value
-    if (newPath === editing.originalPath) { setEditing(null); return }
-    try {
-      await invoke("rename_entry", { oldPath: editing.originalPath, newPath })
-      await loadDir(parentDir)
-      onFileRenamed?.(editing.originalPath, newPath)
-    } catch (e) { console.error("Failed to rename:", e) }
+  const commitRename = useCallback(async (entry: FileEntry, name: string) => {
     setEditing(null)
-  }, [editing, loadDir, onFileRenamed])
+    if (!name) return
+    const parentDir = entry.path.substring(0, entry.path.lastIndexOf("/"))
+    const newPath = parentDir + "/" + name
+    if (newPath === entry.path) return
+    try {
+      await invoke("rename_entry", { oldPath: entry.path, newPath })
+      await loadDir(parentDir)
+      onFileRenamed?.(entry.path, newPath)
+    } catch (e) {
+      toast(`Failed to rename: ${e}`, "error")
+    }
+  }, [loadDir, onFileRenamed])
 
-  const commitNewFile = useCallback(async () => {
-    if (!editing || editing.type !== "newFile") return
-    const filePath = editing.parentDir + "/" + editing.value
+  const commitNewFile = useCallback(async (dirPath: string, name: string) => {
+    setEditing(null)
+    if (!name) return
+    const filePath = dirPath + "/" + name
     try {
       await invoke("create_file", { path: filePath })
-      if (!expandedDirs.has(editing.parentDir)) {
-        setExpandedDirs((prev) => new Set(prev).add(editing.parentDir))
-      }
-      await loadDir(editing.parentDir)
+      setExpandedDirs((prev) => new Set(prev).add(dirPath))
+      await loadDir(dirPath)
       onSelectFile(filePath)
-    } catch (e) { console.error("Failed to create file:", e) }
-    setEditing(null)
-  }, [editing, expandedDirs, loadDir, onSelectFile])
+    } catch (e) {
+      toast(`Failed to create file: ${e}`, "error")
+    }
+  }, [loadDir, onSelectFile])
 
-  const commitNewFolder = useCallback(async () => {
-    if (!editing || editing.type !== "newFolder") return
-    const dirPath = editing.parentDir + "/" + editing.value
+  const commitNewFolder = useCallback(async (dirPath: string, name: string) => {
+    setEditing(null)
+    if (!name) return
+    const dirTarget = dirPath + "/" + name
     try {
-      await invoke("create_directory", { path: dirPath })
-      if (!expandedDirs.has(editing.parentDir)) {
-        setExpandedDirs((prev) => new Set(prev).add(editing.parentDir))
-      }
-      await loadDir(editing.parentDir)
-    } catch (e) { console.error("Failed to create folder:", e) }
-    setEditing(null)
-  }, [editing, expandedDirs, loadDir])
-
-  const commitEdit = useCallback(() => {
-    if (!editing) return
-    if (editing.type === "rename") commitRename()
-    else if (editing.type === "newFile") commitNewFile()
-    else commitNewFolder()
-  }, [editing, commitRename, commitNewFile, commitNewFolder])
+      await invoke("create_directory", { path: dirTarget })
+      setExpandedDirs((prev) => new Set(prev).add(dirPath))
+      await loadDir(dirPath)
+    } catch (e) {
+      toast(`Failed to create folder: ${e}`, "error")
+    }
+  }, [loadDir])
 
   const cancelEdit = useCallback(() => setEditing(null), [])
 
@@ -179,9 +213,21 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
       const parentDir = deleteTarget.path.substring(0, deleteTarget.path.lastIndexOf("/"))
       await loadDir(parentDir)
       onFileDeleted?.(deleteTarget.path)
-    } catch (e) { console.error("Failed to delete:", e) }
+      toast(`Moved "${deleteTarget.name}" to trash`, "success")
+    } catch (e) {
+      toast(`Failed to delete: ${e}`, "error")
+    }
     setDeleteTarget(null)
   }, [deleteTarget, loadDir, onFileDeleted])
+
+  const revealEntry = useCallback(async (entry: FileEntry) => {
+    setContextMenu(null)
+    try {
+      await revealItemInDir(entry.path)
+    } catch (e) {
+      toast(`Failed to reveal: ${e}`, "error")
+    }
+  }, [])
 
   const startRename = useCallback((entry: FileEntry) => {
     setContextMenu(null)
@@ -206,29 +252,53 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
     newFolder: () => startNewFolder(rootPath),
   }), [refresh, startNewFile, startNewFolder, rootPath])
 
-  const renderInlineInput = (paddingLeft: number) => (
-    <div style={{ paddingLeft: `${paddingLeft}px` }} className="flex items-center gap-1 px-2 py-0.5">
-      <Input
-        ref={editInputRef}
-        value={editing!.value}
-        onChange={(e) => setEditing((prev) => prev ? { ...prev, value: e.target.value } : null)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") { e.preventDefault(); commitEdit() }
-          if (e.key === "Escape") { e.preventDefault(); cancelEdit() }
-        }}
-        onBlur={cancelEdit}
-        autoFocus
-        className="h-5 text-xs px-1 py-0"
-        placeholder={editing!.type === "newFile" ? "filename" : editing!.type === "newFolder" ? "folder name" : undefined}
-      />
-    </div>
-  )
+  // Flattened list of currently visible rows, used for arrow-key navigation.
+  const flatEntries = useMemo(() => {
+    const list: FileEntry[] = []
+    const walk = (entries: FileEntry[]) => {
+      for (const entry of entries) {
+        list.push(entry)
+        if (entry.is_dir && expandedDirs.has(entry.path)) walk(dirChildren[entry.path] || [])
+      }
+    }
+    walk(dirChildren[rootPath] || [])
+    return list
+  }, [dirChildren, expandedDirs, rootPath])
 
-  const renderTree = (entries: FileEntry[], depth: number) => {
+  useEffect(() => {
+    if (keyIndex < 0) return
+    const el = containerRef.current?.querySelector(`[data-idx="${keyIndex}"]`)
+    el?.scrollIntoView({ block: "nearest" })
+  }, [keyIndex])
+
+  const onTreeKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (editing) return
+    if (e.key === "ArrowDown") {
+      e.preventDefault()
+      setKeyIndex((prev) => Math.min(prev + 1, flatEntries.length - 1))
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault()
+      setKeyIndex((prev) => Math.max(prev - 1, 0))
+    } else if (e.key === "Home") {
+      e.preventDefault()
+      setKeyIndex(flatEntries.length > 0 ? 0 : -1)
+    } else if (e.key === "End") {
+      e.preventDefault()
+      setKeyIndex(flatEntries.length - 1)
+    } else if (e.key === "Enter" && keyIndex >= 0 && keyIndex < flatEntries.length) {
+      e.preventDefault()
+      const entry = flatEntries[keyIndex]
+      if (entry.is_dir) toggleDir(entry)
+      else onSelectFile(entry.path)
+    }
+  }, [editing, flatEntries, keyIndex, toggleDir, onSelectFile])
+
+  const renderTree = (entries: FileEntry[], depth: number, indexRef: { current: number }) => {
     const items: React.ReactNode[] = []
     const dirs = entries.filter((e) => e.is_dir)
     const files = entries.filter((e) => !e.is_dir)
     for (const entry of dirs) {
+      const idx = indexRef.current++
       const isExpanded = expandedDirs.has(entry.path)
       const children = dirChildren[entry.path] || []
       const isEditingRename = editing?.type === "rename" && editing.originalPath === entry.path
@@ -236,27 +306,25 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
       items.push(
         <div key={entry.path}>
           <div
-            className={`flex items-center gap-1 px-2 py-1 cursor-pointer text-xs hover:bg-card/60 ${
-              selectedPath === entry.path ? "bg-card/80" : ""
-            }`}
+            data-idx={idx}
+            className={`flex items-center gap-1 px-2 py-1 cursor-pointer text-xs ${
+              selectedPath === entry.path
+                ? "bg-accent text-accent-foreground"
+                : "hover:bg-card/60"
+            } ${keyIndex === idx ? "outline outline-1 -outline-offset-1 outline-ring/70" : ""}`}
             style={{ paddingLeft: `${depth * 16 + 8}px` }}
-            onClick={() => toggleDir(entry)}
+            onClick={() => { setKeyIndex(idx); toggleDir(entry) }}
             onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setContextMenu({ x: e.clientX, y: e.clientY, entry }) }}
           >
             <span className="text-[10px] text-muted-foreground w-3">{isExpanded ? "\u25BC" : "\u25B6"}</span>
             {isExpanded ? <FolderOpen size={14} className="text-muted-foreground shrink-0" /> : <Folder size={14} className="text-muted-foreground shrink-0" />}
-            {isEditingRename ? (
-              <Input
-                ref={editInputRef}
-                value={editing.value}
-                onChange={(e) => setEditing((prev) => prev ? { ...prev, value: e.target.value } : null)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") { e.preventDefault(); commitEdit() }
-                  if (e.key === "Escape") { e.preventDefault(); cancelEdit() }
-                }}
-                onBlur={cancelEdit}
+            {isEditingRename && editing ? (
+              <InlineEditInput
+                initialValue={editing.value}
+                rename
                 className="h-5 text-xs px-1 py-0 flex-1 min-w-0"
-                onClick={(e) => e.stopPropagation()}
+                onCommit={(name) => commitRename(entry, name)}
+                onCancel={cancelEdit}
               />
             ) : (
               <span className="truncate">{entry.name}</span>
@@ -264,14 +332,27 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
           </div>
           {isExpanded && (
             <>
-              {isEditingNewInThisDir && editing && renderInlineInput((depth + 1) * 16 + 24)}
-              {renderTree(children, depth + 1)}
+              {isEditingNewInThisDir && editing && (
+                <div style={{ paddingLeft: `${(depth + 1) * 16 + 24}px` }} className="flex items-center gap-1 px-2 py-0.5">
+                  <InlineEditInput
+                    initialValue=""
+                    placeholder={editing.type === "newFile" ? "filename" : "folder name"}
+                    className="h-5 text-xs px-1 py-0 flex-1 min-w-0"
+                    onCommit={(name) =>
+                      editing.type === "newFile" ? commitNewFile(editing.parentDir, name) : commitNewFolder(editing.parentDir, name)
+                    }
+                    onCancel={cancelEdit}
+                  />
+                </div>
+              )}
+              {renderTree(children, depth + 1, indexRef)}
             </>
           )}
         </div>
       )
     }
     for (const entry of files) {
+      const idx = indexRef.current++
       const isEditingRename = editing?.type === "rename" && editing.originalPath === entry.path
       const ext = entry.extension?.toLowerCase() || ""
       const isText = TEXT_EXTENSIONS.has(ext)
@@ -279,26 +360,24 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
       items.push(
         <div
           key={entry.path}
-          className={`flex items-center gap-1 px-2 py-1 cursor-pointer text-xs hover:bg-card/60 ${
-            selectedPath === entry.path ? "bg-card/80" : ""
-          }`}
+          data-idx={idx}
+          className={`flex items-center gap-1 px-2 py-1 cursor-pointer text-xs ${
+            selectedPath === entry.path
+              ? "bg-accent text-accent-foreground"
+              : "hover:bg-card/60"
+          } ${keyIndex === idx ? "outline outline-1 -outline-offset-1 outline-ring/70" : ""}`}
           style={{ paddingLeft: `${depth * 16 + 24}px` }}
-          onClick={() => onSelectFile(entry.path)}
+          onClick={() => { setKeyIndex(idx); onSelectFile(entry.path) }}
           onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setContextMenu({ x: e.clientX, y: e.clientY, entry }) }}
         >
           {isImage ? <span className="text-sm shrink-0">{'\u{1F5BC}'}</span> : isText ? <FileText size={14} className="text-muted-foreground shrink-0" /> : <FileText size={14} className="text-muted-foreground/50 shrink-0" />}
-          {isEditingRename ? (
-            <Input
-              ref={editInputRef}
-              value={editing.value}
-              onChange={(e) => setEditing((prev) => prev ? { ...prev, value: e.target.value } : null)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") { e.preventDefault(); commitEdit() }
-                if (e.key === "Escape") { e.preventDefault(); cancelEdit() }
-              }}
-              onBlur={cancelEdit}
+          {isEditingRename && editing ? (
+            <InlineEditInput
+              initialValue={editing.value}
+              rename
               className="h-5 text-xs px-1 py-0 flex-1 min-w-0"
-              onClick={(e) => e.stopPropagation()}
+              onCommit={(name) => commitRename(entry, name)}
+              onCancel={cancelEdit}
             />
           ) : (
             <span className="truncate">{entry.name}</span>
@@ -313,9 +392,26 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
   const isEditingNewAtRoot = editing && (editing.type === "newFile" || editing.type === "newFolder") && editing.parentDir === rootPath
 
   return (
-    <div className="py-1 select-none">
-      {isEditingNewAtRoot && editing && renderInlineInput(24)}
-      {renderTree(rootLevel, 0)}
+    <div
+      ref={containerRef}
+      className="py-1 select-none outline-none"
+      tabIndex={0}
+      onKeyDown={onTreeKeyDown}
+    >
+      {isEditingNewAtRoot && editing && (
+        <div style={{ paddingLeft: 24 }} className="flex items-center gap-1 px-2 py-0.5">
+          <InlineEditInput
+            initialValue=""
+            placeholder={editing.type === "newFile" ? "filename" : "folder name"}
+            className="h-5 text-xs px-1 py-0 flex-1 min-w-0"
+            onCommit={(name) =>
+              editing.type === "newFile" ? commitNewFile(editing.parentDir, name) : commitNewFolder(editing.parentDir, name)
+            }
+            onCancel={cancelEdit}
+          />
+        </div>
+      )}
+      {renderTree(rootLevel, 0, { current: 0 })}
 
       {contextMenu && (
         <div
@@ -348,6 +444,12 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
             <Pencil size={14} /> Rename
           </button>
           <button
+            className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 hover:bg-accent hover:text-accent-foreground"
+            onClick={() => revealEntry(contextMenu.entry)}
+          >
+            <ExternalLink size={14} /> Reveal in Finder
+          </button>
+          <button
             className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-destructive hover:bg-destructive/10"
             onClick={() => { setDeleteTarget(contextMenu.entry); setContextMenu(null) }}
           >
@@ -361,13 +463,13 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
           <DialogHeader>
             <DialogTitle>Delete {deleteTarget?.is_dir ? "Folder" : "File"}</DialogTitle>
             <DialogDescription>
-              Are you sure you want to delete <span className="font-mono text-foreground">{deleteTarget?.name}</span>?
-              {deleteTarget?.is_dir && " This will delete all contents inside."}
+              Move <span className="font-mono text-foreground">{deleteTarget?.name}</span> to the trash?
+              {deleteTarget?.is_dir && " The folder and all contents will be moved to the trash."}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" size="sm" onClick={() => setDeleteTarget(null)}>Cancel</Button>
-            <Button variant="destructive" size="sm" onClick={handleDelete}>Delete</Button>
+            <Button variant="destructive" size="sm" onClick={handleDelete}>Move to Trash</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

@@ -1,162 +1,53 @@
-import { useState, useCallback, useEffect, useRef } from "react"
+import { useState, useCallback, useEffect, useRef, lazy, Suspense } from "react"
 import { invoke } from "@tauri-apps/api/core"
 import { RefreshCw, FilePlus, FolderPlus } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { FileTree } from "./FileTree"
 import type { FileTreeHandle } from "./FileTree"
-import { Editor } from "./Editor"
-import { readFileAsTab } from "@/lib/fileUtils"
-import type { ToolInfo, EditorTab } from "../types"
+const Editor = lazy(() => import("./Editor"))
+import { TabBar } from "./TabBar"
+import { DirtyCloseDialog } from "./DirtyCloseDialog"
+import { useTabs } from "@/hooks/useTabs"
+import { useSidebarWidth } from "@/hooks/useSidebarWidth"
+import { CardGridSkeleton } from "./Skeleton"
+import type { ToolInfo } from "../types"
 
 export function ConfigPanel() {
   const [tools, setTools] = useState<ToolInfo[]>([])
+  const [loading, setLoading] = useState(true)
   const [activeTool, setActiveTool] = useState<string | null>(null)
   const [homeDir, setHomeDir] = useState("")
-  const [tabs, setTabs] = useState<EditorTab[]>([])
-  const [activeTabPath, setActiveTabPath] = useState<string | null>(null)
   const treeRef = useRef<FileTreeHandle>(null)
+  const [sidebarWidth, sidebarDivider] = useSidebarWidth("config-panel")
+
+  const {
+    tabs, activeTabPath, activeTab,
+    openFile, closeTab, switchTab,
+    handleEditorChange, refreshAllTabs, handleSave, handleFileDeleted, handleFileRenamed, clearTabs,
+    dirtyPendingTab, resolvePendingClose, cancelPendingClose,
+  } = useTabs()
 
   useEffect(() => {
-    invoke<ToolInfo[]>("list_tools").then((list) => {
-      setTools(list)
-      if (list.length > 0) setActiveTool(list[0].key)
-    })
-    invoke<string>("get_home_dir").then(setHomeDir)
+    Promise.all([
+      invoke<ToolInfo[]>("list_tools"),
+      invoke<string>("get_home_dir"),
+    ])
+      .then(([list, home]) => {
+        setTools(list)
+        setHomeDir(home)
+        if (list.length > 0) setActiveTool(list[0].key)
+      })
+      .catch((e) => console.error("Failed to load tools:", e))
+      .finally(() => setLoading(false))
   }, [])
 
   const activeToolInfo = tools.find((t) => t.key === activeTool)
   const rootPath = activeToolInfo && homeDir ? homeDir + "/" + activeToolInfo.detect_dir : ""
 
-  const openFile = useCallback(
-    async (filePath: string) => {
-      const existing = tabs.find((t) => t.path === filePath)
-      if (existing) {
-        setActiveTabPath(filePath)
-        if (!existing.is_dirty && !existing.is_image) {
-          try {
-            const tab = await readFileAsTab(filePath)
-            setTabs((prev) => prev.map((t) => (t.path === filePath ? { ...t, content: tab.content } : t)))
-          } catch {}
-        }
-        return
-      }
-      try {
-        const tab = await readFileAsTab(filePath)
-        setTabs((prev) => [...prev, tab])
-        setActiveTabPath(filePath)
-      } catch (e) { console.error("Failed to read file:", e) }
-    },
-    [tabs]
-  )
-
-  const closeTab = useCallback(
-    (path: string, e?: React.MouseEvent) => {
-      e?.stopPropagation()
-      const idx = tabs.findIndex((t) => t.path === path)
-      setTabs((prev) => prev.filter((t) => t.path !== path))
-      if (activeTabPath === path) {
-        const remaining = tabs.filter((t) => t.path !== path)
-        setActiveTabPath(remaining[Math.min(idx, remaining.length - 1)]?.path || null)
-      }
-    },
-    [tabs, activeTabPath]
-  )
-
-  useEffect(() => {
-    if (tabs.length === 0) return
-    const onKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "w") {
-        e.preventDefault()
-        if (activeTabPath) closeTab(activeTabPath)
-      }
-    }
-    window.addEventListener("keydown", onKeyDown)
-    return () => window.removeEventListener("keydown", onKeyDown)
-  }, [tabs.length, activeTabPath, closeTab])
-
-  const handleEditorChange = useCallback((path: string, content: string) => {
-    setTabs((prev) => prev.map((t) => (t.path === path ? { ...t, content, is_dirty: true } : t)))
-  }, [])
-
-  const switchTab = useCallback(
-    async (path: string) => {
-      setActiveTabPath(path)
-      const tab = tabs.find((t) => t.path === path)
-      if (tab && !tab.is_dirty && !tab.is_image) {
-        try {
-          const updated = await readFileAsTab(path)
-          setTabs((prev) => prev.map((t) => (t.path === path ? { ...t, content: updated.content } : t)))
-        } catch {}
-      }
-    },
-    [tabs]
-  )
-
-  const refreshAllTabs = useCallback(async () => {
-    for (const tab of tabs) {
-      if (!tab.is_dirty && !tab.is_image) {
-        try {
-          const updated = await readFileAsTab(tab.path)
-          setTabs((prev) => prev.map((t) => (t.path === tab.path ? { ...t, content: updated.content } : t)))
-        } catch {}
-      }
-    }
-  }, [tabs])
-
   const handleRefresh = useCallback(async () => {
     await treeRef.current?.refresh()
     await refreshAllTabs()
   }, [refreshAllTabs])
-
-  const handleSave = useCallback(
-    async (path: string, content: string) => {
-      try {
-        await invoke("write_text_file", { path, content })
-        setTabs((prev) => prev.map((t) => (t.path === path ? { ...t, content, is_dirty: false } : t)))
-      } catch (e) { console.error("Failed to save file:", e) }
-    },
-    []
-  )
-
-  const handleFileDeleted = useCallback(
-    (path: string) => {
-      const idx = tabs.findIndex((t) => t.path === path)
-      if (idx === -1) return
-      setTabs((prev) => prev.filter((t) => t.path !== path))
-      if (activeTabPath === path) {
-        const remaining = tabs.filter((t) => t.path !== path)
-        setActiveTabPath(remaining[Math.min(idx, remaining.length - 1)]?.path || null)
-      }
-    },
-    [tabs, activeTabPath]
-  )
-
-  const handleFileRenamed = useCallback(
-    (oldPath: string, newPath: string) => {
-      setTabs((prev) =>
-        prev.map((t) => {
-          if (t.path === oldPath) {
-            const name = newPath.split("/").pop() || newPath
-            return { ...t, path: newPath, name }
-          }
-          if (t.path.startsWith(oldPath + "/")) {
-            const suffix = t.path.slice(oldPath.length)
-            const updatedPath = newPath + suffix
-            const name = updatedPath.split("/").pop() || updatedPath
-            return { ...t, path: updatedPath, name }
-          }
-          return t
-        })
-      )
-      if (activeTabPath === oldPath) setActiveTabPath(newPath)
-      else if (activeTabPath?.startsWith(oldPath + "/")) {
-        setActiveTabPath(newPath + activeTabPath.slice(oldPath.length))
-      }
-    },
-    [activeTabPath]
-  )
-
-  const activeTab = tabs.find((t) => t.path === activeTabPath)
 
   return (
     <div className="h-full flex flex-col">
@@ -168,16 +59,19 @@ export function ConfigPanel() {
             variant={activeTool === t.key ? "secondary" : "ghost"}
             size="sm"
             className="h-6 text-xs shrink-0"
-            onClick={() => { setActiveTool(t.key); setActiveTabPath(null); setTabs([]) }}
+            onClick={() => { setActiveTool(t.key); clearTabs() }}
           >
             {t.name}
           </Button>
         ))}
       </div>
       <div className="flex-1 flex overflow-hidden">
-        {activeToolInfo && rootPath ? (
+        {loading ? (
+          <div className="flex-1 p-6"><CardGridSkeleton count={3} /></div>
+        ) : activeToolInfo && rootPath ? (
           <>
-            <div className="w-64 bg-card/40 border-r border-border overflow-y-auto shrink-0">
+            {sidebarDivider}
+            <div className="bg-card/40 border-r border-border overflow-y-auto shrink-0 flex flex-col" style={{ width: sidebarWidth }}>
               <div className="flex items-center gap-0.5 px-3 py-2 text-[10px] text-muted-foreground font-mono border-b border-border">
                 <span className="truncate flex-1">{activeToolInfo.detect_dir}</span>
                 <div className="flex items-center gap-0.5 shrink-0">
@@ -204,41 +98,36 @@ export function ConfigPanel() {
                   </button>
                 </div>
               </div>
-              <FileTree ref={treeRef} rootPath={rootPath} onSelectFile={openFile} selectedPath={activeTabPath} onFileDeleted={handleFileDeleted} onFileRenamed={handleFileRenamed} />
+              <FileTree key={rootPath} ref={treeRef} rootPath={rootPath} onSelectFile={openFile} selectedPath={activeTabPath} onFileDeleted={handleFileDeleted} onFileRenamed={handleFileRenamed} />
             </div>
             <div className="flex-1 flex flex-col overflow-hidden">
-              {tabs.length > 0 && (
-                <div className="flex bg-card/30 border-b border-border overflow-x-auto h-9 shrink-0">
-                  {tabs.map((tab) => (
-                    <div
-                      key={tab.path}
-                      className={`flex items-center gap-1.5 px-3 h-full text-xs cursor-pointer border-r border-border whitespace-nowrap ${
-                        activeTabPath === tab.path ? "bg-background border-b-2 border-b-foreground" : "bg-card/50 hover:bg-card"
-                      }`}
-                      onClick={() => switchTab(tab.path)}
-                    >
-                      <span className="max-w-[150px] truncate">{tab.name}</span>
-                      {tab.is_dirty && <span className="text-blue-400 font-bold">*</span>}
-                      <span className="text-muted-foreground hover:text-foreground ml-1" onClick={(e) => closeTab(tab.path, e)}>×</span>
-                    </div>
-                  ))}
-                </div>
-              )}
+              <TabBar tabs={tabs} activeTabPath={activeTabPath} onSelect={switchTab} onClose={closeTab} />
               <div className="flex-1 overflow-hidden">
                 {activeTab ? (
-                  <Editor tab={activeTab} onChange={handleEditorChange} onSave={handleSave} />
+                  <Suspense fallback={null}>
+                    <Editor tab={activeTab} onChange={handleEditorChange} onSave={handleSave} />
+                  </Suspense>
                 ) : (
-                  <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
-                    Select a file from the sidebar
+                  <div className="h-full flex flex-col items-center justify-center gap-1 text-sm text-muted-foreground">
+                    <span>Select a file from the sidebar</span>
+                    <span className="text-[10px] text-muted-foreground/60 font-mono">↑↓ navigate · Enter open · right-click for menu</span>
                   </div>
                 )}
               </div>
             </div>
           </>
         ) : (
-          <div className="flex-1 flex items-center justify-center text-sm text-muted-foreground">Loading...</div>
+          <div className="flex-1 flex items-center justify-center text-sm text-muted-foreground">No tools detected</div>
         )}
       </div>
+      {dirtyPendingTab && (
+        <DirtyCloseDialog
+          tab={dirtyPendingTab}
+          onSaveClose={() => void resolvePendingClose(true)}
+          onDiscard={() => void resolvePendingClose(false)}
+          onCancel={cancelPendingClose}
+        />
+      )}
     </div>
   )
 }

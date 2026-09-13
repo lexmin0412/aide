@@ -14,32 +14,46 @@
 ```
 src/
 ├── components/
-│   ├── SkillGrid.tsx      # Skills listing page (grid + search)
+│   ├── SkillGrid.tsx      # Skills listing page (grid + search + new skill + empty state)
 │   ├── SkillCard.tsx      # Individual skill card
 │   ├── SkillDetail.tsx    # Skill detail view (file tree + editor + delete)
 │   ├── SyncPanel.tsx      # Skills sync modal (symlink management)
 │   ├── MCPPage.tsx        # MCP servers management page
 │   ├── ConfigPanel.tsx    # Config file browser per tool
-│   ├── Editor.tsx         # CodeMirror 6 + image viewer wrapper
+│   ├── Editor.tsx         # CodeMirror 6 + markdown preview + image viewer wrapper
+│   ├── CommandPalette.tsx # Cmd+K skill search palette
+│   ├── NewSkillDialog.tsx # Create skill scaffold (folder + SKILL.md frontmatter)
+│   ├── TabBar.tsx         # Shared editor tab strip
+│   ├── Skeleton.tsx       # Loading placeholders
 │   ├── ErrorBoundary.tsx  # Global error boundary
-│   ├── FileTree.tsx       # Directory tree with context menu
-│   ├── TagEditor.tsx      # Inline tag editor popover
+│   ├── FileTree.tsx       # Directory tree (context menu, keyboard nav)
+│   ├── TagEditor.tsx      # Tag editing content (rendered inside a popover)
 │   ├── UpdateDialog.tsx   # Auto-update check & install dialog
-│   └── ui/                # shadcn/ui primitives (button, dialog, input, etc.)
+│   └── ui/                # shadcn/ui primitives (button, dialog, input, popover, etc.)
+├── hooks/
+│   ├── useTabs.ts         # Shared tab state (open/close/switch/save, mtime reload)
+│   └── useSidebarWidth.ts # Resizable, persisted sidebar width
 ├── lib/
 │   ├── utils.ts           # cn() utility (clsx + tailwind-merge)
-│   └── fileUtils.ts       # readFileAsTab, isImageFile helpers
+│   ├── fileUtils.ts       # readFileAsTab, getFileMtime, isImageFile helpers
+│   ├── markdown.ts        # Minimal markdown renderer for preview
+│   ├── theme.ts           # Theme preference (system/light/dark) helpers
+│   └── toast.tsx          # Global toast emitter + ToastHost
+├── stores/
+│   └── skillStore.ts      # Search query + scroll position persistence
 ├── types/
 │   └── index.ts           # Shared TypeScript types
-├── App.tsx                # Root layout (page routing + skill CRUD)
+├── App.tsx                # Root layout (page routing + skill CRUD + palette + theme)
 ├── App.css                # Global styles + Tailwind theme
 └── main.tsx               # Entry point
 
 src-tauri/
 └── src/
-    ├── lib.rs             # Tauri commands (22 commands)
+    ├── lib.rs             # Tauri commands (31 commands)
     ├── main.rs            # Entry point
-    ├── adapter/mod.rs     # Tool adapter definitions (8 AI tools)
+    ├── adapter/mod.rs     # Tool adapter definitions (43 AI tools)
+    ├── registry.rs        # skills.sh registry search + GitHub install
+    ├── git_sync.rs        # Scoped git backup/share (publish/pull per remote)
     └── mcp.rs             # MCP config management
 ```
 
@@ -48,19 +62,23 @@ src-tauri/
 | Command | Params | Returns | Description |
 |---|---|---|---|
 | `list_skills` | — | `SkillInfo[]` | List skills from ~/.agents/skills |
+| `import_skill` | `source: string` | `string` | Copy a local folder into ~/.agents/skills (rejects duplicates, skips node_modules/.git/etc.) |
+| `search_registry` | `query: string` | `RegistrySkill[]` | Search the skills.sh community registry (same unauthenticated API as `npx skills`) |
+| `install_skill_from_registry` | `id: string` | `RemoteInstallResult` | Install `owner/repo[/skill]` from GitHub (25 MB archive cap, provenance in ~/.aide/skill-sources.json) |
+| `search_skills` | `query: string` | `SkillSearchMatch[]` | Case-insensitive full-text search across skill text files |
 | `list_directory` | `path: string` | `FileEntry[]` | List dir (dirs first, alpha) |
 | `read_text_file` | `path: string` | `string` | Read file as UTF-8 |
-| `read_binary_base64` | `path: string` | `string` | Read file as base64 data URL |
 | `write_text_file` | `path, content: string` | `void` | Write file (creates parent dirs) |
 | `create_file` | `path: string` | `void` | Create empty file |
 | `create_directory` | `path: string` | `void` | Create dir (recursive) |
-| `delete_entry` | `path: string` | `void` | Delete file/dir/symlink (recursive) |
+| `delete_entry` | `path: string` | `void` | Move file/dir to system trash (falls back to permanent delete) |
 | `rename_entry` | `old_path, new_path: string` | `void` | Rename/move |
 | `file_exists` | `path: string` | `boolean` | Check existence |
+| `get_file_mtime` | `path: string` | `u64` | File modification time (unix seconds) |
 | `get_home_dir` | — | `string` | User home directory |
 | `list_tools` | — | `ToolInfo[]` | List supported AI tools |
 | `check_sync_statuses` | — | `ToolInfo[]` | Tools with sync status |
-| `sync_tool` | `tool_key: string` | `SyncResult` | Sync skills to one tool |
+| `sync_tool` | `tool_key: string, overwrite?: bool` | `SyncResult` | Sync skills to one tool; conflicting tool-side copies are backed up to ~/.aide/sync-backup unless `overwrite` |
 | `sync_all_tools` | — | `SyncResult[]` | Sync skills to all tools |
 | `list_mcp_servers` | — | `McpServerView[]` | List central MCP servers |
 | `save_mcp_servers` | `servers: McpServerView[]` | `void` | Save central MCP config |
@@ -68,7 +86,12 @@ src-tauri/
 | `sync_mcp_tool` | `tool_key: string` | `McpSyncResult` | Sync MCP to one tool |
 | `sync_mcp_all` | — | `McpSyncResult[]` | Sync MCP to all tools |
 | `import_mcp_all` | — | `ImportResult[]` | Import MCP configs from all tools |
-| `update_skill_tags` | `path, tags: string[]` | `void` | Update tags in SKILL.md frontmatter |
+| `update_skill_tags` | `path, tags: string[]` | `void` | Update tags in SKILL.md frontmatter (drops nested metadata.tags) |
+| `get_git_config` | — | `GitRemotesConfig` | Read ~/.aide/remotes.json (scopes + skill scope assignments) |
+| `save_git_config` | `config: GitRemotesConfig` | `void` | Validate and write the scope config |
+| `set_skill_scope` | `skill: string, scope?: string` | `void` | Assign a skill to a git scope (None = default scope) |
+| `publish_scope` | `scope: string` | `PublishOutcome` | Mirror the scope's skills into its worktree, commit and push (auto-rebase retry) |
+| `pull_scope` | `scope: string` | `PullOutcome` | Fast-forward pull, then write remote-side skills back (remote wins, never deletes local-only) |
 
 ## Conventions
 
@@ -78,9 +101,10 @@ src-tauri/
 - All Rust commands return `Result<T, String>`
 - Frontend invokes via `@tauri-apps/api/core` `invoke()`
 - Editor keymap uses `useRef` for callbacks to avoid stale closures
-- CSS variables in `:root` for theming (dark theme, oklch color space)
+- CSS variables in `:root`/`.dark` for theming (light + dark palettes, oklch color space); theme preference stored in localStorage `theme` (absent = system)
 - Context menus use `pointerdown` (capture) + `menuRef.contains()` pattern
 - Hooks must always be called unconditionally (Rules of Hooks)
+- User-facing async failures go through `toast()` from `@/lib/toast`, never `alert()`
 
 ## Development
 
@@ -92,12 +116,20 @@ pnpm tauri build    # Production build + bundling
 
 ## Architecture Notes
 
-- **File CRUD** uses direct Rust `std::fs` operations (unrestricted access)
-- **Editor state** tied to `tab.path` — switching tabs recreates the EditorView
+- **File CRUD** uses direct Rust `std::fs` operations (unrestricted access); images are served via the Tauri asset protocol (`convertFileSrc`), not base64 IPC
+- **Editor state** tied to `tab.path` — switching tabs recreates the EditorView; undo history/scroll are preserved via a per-path `EditorState` cache in Editor.tsx
+- **Tab reloads** are mtime-aware: non-dirty tabs only re-read when `get_file_mtime` reports a change
 - **Save flow**: Cmd+S → `onSaveRef.current(path, content)` → `fs::write`
+- **Markdown preview**: `.md` tabs get an edit/preview toggle; renderer is `lib/markdown.ts` (no markdown dependency)
 - **Image viewer**: Editor splits into ImageViewer / TextViewer components (Rules of Hooks)
-- **Skill sync** uses symlinks from `~/.agents/skills` to each tool's skills directory
-- **MCP central config** stored at `~/.aide/mcp.json`, synced per tool format
-- **FileTree context menu**: right-click for Rename, Delete, New File, New Folder
-- **Tab management**: Cmd+W intercepts close-tab when tabs are open
+- **Skill sync** uses symlinks (junctions on Windows) from `~/.agents/skills` to each tool's skills directory; conflicting tool-side skills are moved to `~/.aide/sync-backup/<tool>/<skill>-<timestamp>` unless overwrite is requested
+- **MCP sync is an upsert merge**: central servers override same-name entries in the tool config, tool-only servers are preserved; central config at `~/.aide/mcp.json`
+- **Tool adapters**: 43 tools with vercel-labs/skills-verified paths; tools whose global dir is `.agents/skills` are native (no symlink), the rest are linked on sync
+- **FileTree context menu**: right-click for Rename, Delete, Reveal in Finder, New File, New Folder; arrow keys navigate, Enter opens/toggles
+- **New Skill** scaffolds `<name>/SKILL.md` with frontmatter via `create_directory` + `write_text_file`
+- **Tab management**: Cmd+W closes the active tab; closing a tab with unsaved edits asks for confirmation; Cmd+K opens the search palette (skills + full-text file matches)
+- **Skill import**: local folders are copied into ~/.agents/skills via `import_skill`; registry installs come from GitHub tarballs via `install_skill_from_registry` (no git binary needed); both record provenance in ~/.aide/skill-sources.json, surfaced as `SkillInfo.source`
+- **Editor theme**: follows the app theme (oneDark in dark mode, palette-driven light theme via CSS variables)
+- **Brand**: indigo accent on primary actions/rings/links (`--primary`/`--ring`); header logo + app icon share the 2x2 module-grid mark
+- **Git backup**: scopes in ~/.aide/remotes.json map skills to separate remotes (personal vs company repos stay isolated). Canonical skills are never restructured; each scope keeps a mirrored worktree in ~/.aide/scopes/<scope>. Publish = mirror + commit + push (rebase retry on non-fast-forward); Pull = ff-only pull + remote-wins write-back that never deletes local-only skills. Git shells out to the system `git` so SSH agents/credential helpers apply
 - Port: 1430 (Vite) / 1431 (HMR)

@@ -1,6 +1,6 @@
 [package]
 name = "aide"
-version = "0.1.0"
+version = "0.2.0"
 description = "AI development environment config manager"
 authors = ["you"]
 edition = "2021"
@@ -13,17 +13,21 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-serde_yaml = "0.9"
+serde_norway = "0.9"
 toml = "0.8"
 dirs = "6"
-base64 = "0.22"
+trash = "5"
+ureq = "2"
+flate2 = "1"
+tar = "0.4"
+tauri-plugin-window-state = "2"
 
 [profile.release]
 codegen-units = 1

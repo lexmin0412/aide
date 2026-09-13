@@ -5,7 +5,9 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
+    "core:window:allow-set-title",
     "opener:default",
+    "opener:allow-reveal-item-in-dir",
     "dialog:default",
     "updater:default",
     "process:default"
