@@ -10,6 +10,7 @@ A unified hub for managing cross-agent AI configurations — Skills, MCP, and mo
 
 - **Skills Management**: Install, browse, edit, tag, and sync AI agent skills across 8 tools via symlink
 - **MCP Server Management**: Centralized MCP config with import/sync to tool-specific formats
+- **Model Management**: Provider profiles backed by models.dev (213+ providers) with locally-stored API keys, synced to Claude Code / OpenCode / Codex
 - **Config Browser**: View and edit raw config files for each supported AI tool
 - **Code Editor**: CodeMirror 6 with JSON linting, Markdown support, dark theme
 - **Image Viewer**: Preview png/jpg/gif/webp/svg/bmp files inline

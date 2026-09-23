@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 pub mod adapter;
 pub mod git_sync;
 pub mod mcp;
+pub mod models;
 pub mod registry;
 
 #[derive(Debug, Serialize)]
@@ -495,6 +496,50 @@ fn update_skill(skill: String) -> Result<registry::RemoteInstallResult, String> 
     let skills_dir = resolve_skills_source()?;
     fs::create_dir_all(&skills_dir).map_err(|e| e.to_string())?;
     registry::install_from_id(&meta.id, &skills_dir, &aide_dir, true)
+}
+
+// ── Model/provider management ──
+
+#[tauri::command]
+fn list_model_providers(force: Option<bool>) -> Result<Vec<models::ProviderSummary>, String> {
+    let home = dirs::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
+    models::fetch_models_dev(&home.join(".aide"), force.unwrap_or(false))
+}
+
+#[tauri::command]
+fn list_model_profiles() -> Result<models::ModelProfilesConfig, String> {
+    let home = dirs::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
+    Ok(models::read_profiles(&home.join(".aide")))
+}
+
+#[tauri::command]
+fn save_model_profiles(config: models::ModelProfilesConfig) -> Result<(), String> {
+    let home = dirs::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
+    models::write_profiles(&home.join(".aide"), &config)
+}
+
+#[tauri::command]
+fn sync_model_profile(profile_id: String) -> Result<Vec<models::ModelSyncResult>, String> {
+    let home = dirs::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
+    let aide_dir = home.join(".aide");
+    let config = models::read_profiles(&aide_dir);
+    let profile = config
+        .profiles
+        .iter()
+        .find(|p| p.id == profile_id)
+        .ok_or_else(|| format!("Unknown profile \"{profile_id}\""))?
+        .clone();
+    let providers = models::fetch_models_dev(&aide_dir, false)?;
+    Ok(models::sync_profile(&profile, &providers, &home))
+}
+
+#[tauri::command]
+fn sync_all_model_profiles() -> Result<Vec<models::ModelProfileSyncResult>, String> {
+    let home = dirs::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
+    let aide_dir = home.join(".aide");
+    let config = models::read_profiles(&aide_dir);
+    let providers = models::fetch_models_dev(&aide_dir, false)?;
+    Ok(models::sync_all_profiles(&config, &providers, &home))
 }
 
 const AGENT_SERVER_NAME: &str = "aide";
@@ -1119,6 +1164,11 @@ pub fn run() {
             update_skill,
             get_agent_server,
             enable_agent_access,
+            list_model_providers,
+            list_model_profiles,
+            save_model_profiles,
+            sync_model_profile,
+            sync_all_model_profiles,
             sync_tool,
             sync_all_tools,
             list_skills,

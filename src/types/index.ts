@@ -70,6 +70,47 @@ export interface AgentServerStatus {
   command: string | null
 }
 
+export interface ModelSummary {
+  id: string
+  name: string
+  context: number | null
+}
+
+export interface ProviderSummary {
+  id: string
+  name: string
+  npm: string | null
+  base_url: string | null
+  models: ModelSummary[]
+}
+
+export interface ModelProfile {
+  id: string
+  name: string
+  provider: string
+  base_url: string
+  api_key: string
+  model: string
+  models: string[]
+  targets: string[]
+}
+
+export interface ModelProfilesConfig {
+  profiles: ModelProfile[]
+}
+
+export interface ModelSyncResult {
+  tool: string
+  ok: boolean
+  message: string
+}
+
+export interface ModelProfileSyncResult {
+  profile_id: string
+  profile_name: string
+  results: ModelSyncResult[]
+}
+
 export interface ToolInfo {
   key: string
   name: string

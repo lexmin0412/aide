@@ -7,6 +7,7 @@ import SkillGrid from "./components/SkillGrid"
 import SkillDetail from "./components/SkillDetail"
 import { ConfigPanel } from "./components/ConfigPanel"
 import MCPPage from "./components/MCPPage"
+import ModelPage from "./components/ModelPage"
 import { UpdateDialog } from "./components/UpdateDialog"
 import { CommandPalette } from "./components/CommandPalette"
 import { Logo } from "./components/Logo"
@@ -16,7 +17,7 @@ import type { ThemePref } from "@/lib/theme"
 import type { SkillInfo } from "./types"
 import "./App.css"
 
-type Page = "skills" | "mcp" | "configs"
+type Page = "skills" | "mcp" | "models" | "configs"
 
 const THEME_ICONS: Record<ThemePref, React.ReactNode> = {
   system: (
@@ -95,6 +96,7 @@ export default function App() {
   const tabs: { key: Page; label: string }[] = [
     { key: "skills", label: t("nav.skills") },
     { key: "mcp", label: t("nav.mcp") },
+    { key: "models", label: t("nav.models") },
     { key: "configs", label: t("nav.configs") },
   ]
 
@@ -225,6 +227,9 @@ export default function App() {
         </div>
         <div className={`absolute inset-0 ${page === "mcp" ? "" : "hidden"}`}>
           <MCPPage />
+        </div>
+        <div className={`absolute inset-0 ${page === "models" ? "" : "hidden"}`}>
+          <ModelPage />
         </div>
         <div className={`absolute inset-0 ${page === "configs" ? "" : "hidden"}`}>
           <ConfigPanel />

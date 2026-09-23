@@ -69,6 +69,10 @@ aide-mcp pull [scope]            # 从远端拉取
 aide-mcp serve                   # 运行 MCP stdio 服务器（默认）
 ```
 
+### 模型管理
+
+基于 models.dev（213+ 供应商）的模型配置管理：新建供应商 Profile（自动拉取模型列表、手动填 API Key、可选代理 Base URL），保存多份配置（`~/.aide/models.json`，本地 0600 权限），一键或批量同步到支持模型配置的工具（Claude Code 环境变量 / OpenCode provider / Codex config.toml）。
+
 ### MCP 管理
 
 中心化 MCP 配置（`~/.aide/mcp.json`）+ 一键同步到各工具的专属格式（JSON/JSONC/TOML）。同步是 **upsert 合并**：aide 管的 server 覆盖同名项，你在工具端手动添加的 server 原样保留。支持从所有已装工具反向导入（Scan）。

@@ -49,12 +49,13 @@ src/
 
 src-tauri/
 └── src/
-    ├── lib.rs             # Tauri commands (35 commands)
+    ├── lib.rs             # Tauri commands (40 commands)
     ├── main.rs            # Entry point
     ├── adapter/mod.rs     # Tool adapter definitions (43 AI tools)
     ├── registry.rs        # skills.sh registry search + GitHub install
     ├── git_sync.rs        # Scoped git backup/share (publish/pull per remote)
     ├── registry.rs        # skills.sh registry search + GitHub install
+    ├── models.rs          # Model profiles + models.dev registry + per-tool sync
     └── bin/aide-mcp.rs    # MCP stdio server + CLI over the same core (sidecar)
 ```
 
@@ -92,6 +93,11 @@ src-tauri/
 | `update_skill` | `skill: string` | `RemoteInstallResult` | Reinstall a skill from its recorded upstream id (replaced copy goes to trash) |
 | `get_agent_server` | — | `AgentServerStatus` | aide-mcp sidecar availability and whether agent access is enabled |
 | `enable_agent_access` | `enable: bool` | `AgentServerStatus` | Add/remove the aide MCP server entry in the central MCP config |
+| `list_model_providers` | `force?: bool` | `ProviderSummary[]` | models.dev providers+models with a 24h disk cache (~/.aide/cache) |
+| `list_model_profiles` | — | `ModelProfilesConfig` | Read ~/.aide/models.json (0600) |
+| `save_model_profiles` | `config: ModelProfilesConfig` | `void` | Validate and write model profiles |
+| `sync_model_profile` | `profile_id: string` | `ModelSyncResult[]` | Write one profile into its target tools (claude_code env / opencode provider / codex config.toml) |
+| `sync_all_model_profiles` | — | `ModelProfileSyncResult[]` | Sync every profile to its targets |
 | `get_git_config` | — | `GitRemotesConfig` | Read ~/.aide/remotes.json (scopes + skill scope assignments) |
 | `save_git_config` | `config: GitRemotesConfig` | `void` | Validate and write the scope config |
 | `set_skill_scope` | `skill: string, scope?: string` | `void` | Assign a skill to a git scope (None = default scope) |
@@ -136,6 +142,7 @@ pnpm tauri build    # Production build + bundling
 - **Skill import**: local folders are copied into ~/.agents/skills via `import_skill`; registry installs come from GitHub tarballs via `install_skill_from_registry` (no git binary needed); both record provenance in ~/.aide/skill-sources.json, surfaced as `SkillInfo.source`
 - **Editor theme**: follows the app theme (oneDark in dark mode, palette-driven light theme via CSS variables)
 - **Brand**: indigo accent on primary actions/rings/links (`--primary`/`--ring`); header logo + app icon share the 2x2 module-grid mark
+- **Model management**: profiles in ~/.aide/models.json (0600) pair a models.dev provider with an API key, optional base URL and model selection; sync targets are only the tools with file-based model config (claude_code settings.json env for anthropic/protocol proxies, opencode provider section, codex config.toml model_providers with env_key); other targets report unsupported
 - **Agent access**: aide bundles an `aide-mcp` sidecar (src/bin/aide-mcp.rs) that is both an MCP stdio server (8 skill-domain tools: list/search/install/update/publish/pull) and a human CLI; enabling agent access registers it in the central MCP config, synced to tools like any other server. Registry installs record the upstream commit so `check_skill_updates` can detect upstream changes via the GitHub API
 - **Git backup**: scopes in ~/.aide/remotes.json map skills to separate remotes (personal vs company repos stay isolated). Canonical skills are never restructured; each scope keeps a mirrored worktree in ~/.aide/scopes/<scope>. Publish = mirror + commit + push (rebase retry on non-fast-forward); Pull = ff-only pull + remote-wins write-back that never deletes local-only skills. Git shells out to the system `git` so SSH agents/credential helpers apply
 - Port: 1430 (Vite) / 1431 (HMR)

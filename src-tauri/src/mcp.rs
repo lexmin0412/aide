@@ -377,7 +377,7 @@ pub struct ImportMcpResult {
     pub skipped: Vec<String>,
 }
 
-fn strip_jsonc_comments(input: &str) -> String {
+pub(crate) fn strip_jsonc_comments(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     let mut in_string = false;
     let mut chars = input.chars().peekable();
