@@ -82,6 +82,11 @@ fn tool_definitions() -> Value {
             }
         },
         {
+            "name": "sync_all_tools",
+            "description": "Link the central skills store (~/.agents/skills) to every supported tool via symlink/junction so newly installed skills become available. Conflicting tool-side copies are backed up first. Tools using .agents/skills natively are skipped.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
             "name": "publish_scope",
             "description": "Mirror, commit and push the scope's skills to its git remote. Omit scope to use the default scope.",
             "inputSchema": {
@@ -164,6 +169,15 @@ fn call_tool(name: &str, args: &Value) -> Result<String, String> {
             let result =
                 registry::install_from_id(&meta.id, &skills_dir()?, &aide_dir()?, true)?;
             text_result(format!("Updated: {}", result.installed.join(", ")))
+        }
+        "sync_all_tools" => {
+            let results = aide_lib::sync_all_skills_to_tools();
+            let linked = results.iter().filter(|r| r.success && r.error.is_none()).count();
+            text_result(format!(
+                "Synced {} tool(s) ({} linked ok)",
+                results.len(),
+                linked
+            ))
         }
         "publish_scope" | "pull_scope" => {
             let aide = aide_dir()?;
@@ -271,6 +285,7 @@ fn usage() -> String {
          aide-mcp install <id>         Install a skill from GitHub\n  \
          aide-mcp updates              List skills with upstream changes\n  \
          aide-mcp update <skill>       Update a skill from its upstream\n  \
+         aide-mcp sync                 Link skills to every supported tool\n  \
          aide-mcp publish [scope]      Publish a scope to its git remote\n  \
          aide-mcp pull [scope]         Pull a scope from its git remote"
     )
@@ -363,6 +378,14 @@ fn cli_main(args: &[String]) -> Result<String, String> {
                 .clone();
             let result = registry::install_from_id(&meta.id, &skills_dir()?, &aide_dir()?, true)?;
             Ok(format!("Updated: {}", result.installed.join(", ")))
+        }
+        Some("sync") => {
+            let results = aide_lib::sync_all_skills_to_tools();
+            Ok(results
+                .iter()
+                .map(|r| format!("{}: {}", r.name, if r.success { "ok" } else { r.error.as_deref().unwrap_or("failed") }))
+                .collect::<Vec<_>>()
+                .join("\n"))
         }
         Some("publish") | Some("pull") => {
             let mode = args[0].clone();

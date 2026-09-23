@@ -948,10 +948,9 @@ fn sync_tool(tool_key: String, overwrite: Option<bool>) -> Result<SyncResult, St
     result(merged, backed_up, conflicts, None)
 }
 
-#[tauri::command]
-fn sync_all_tools() -> Vec<SyncResult> {
-    let tools = adapter::all_tools();
-    tools
+/// Core of `sync_all_tools`, shared with the aide-mcp binary.
+pub fn sync_all_skills_to_tools() -> Vec<SyncResult> {
+    adapter::all_tools()
         .into_iter()
         .filter_map(|t| {
             if t.global_skills == ".agents/skills" {
@@ -960,6 +959,11 @@ fn sync_all_tools() -> Vec<SyncResult> {
             sync_tool(t.key.to_string(), None).ok()
         })
         .collect()
+}
+
+#[tauri::command]
+fn sync_all_tools() -> Vec<SyncResult> {
+    sync_all_skills_to_tools()
 }
 
 #[tauri::command]
