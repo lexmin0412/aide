@@ -9,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "@/lib/toast";
+import { useTranslation } from "react-i18next";
 import { CardGridSkeleton } from "./Skeleton";
 import { Switch } from "@/components/ui/switch";
 import type { AgentServerStatus } from "../types";
@@ -48,6 +49,7 @@ interface ToolOption {
 type AddMode = "form" | "json";
 
 export default function MCPPage() {
+  const { t } = useTranslation();
   const [servers, setServers] = useState<McpServer[]>([]);
   const [tools, setTools] = useState<ToolOption[]>([]);
   const [loading, setLoading] = useState(true);
@@ -84,13 +86,13 @@ export default function MCPPage() {
       setEditing(null);
       toast("MCP servers saved", "success");
     } catch (e) {
-      toast(`Failed to save MCP servers: ${e}`, "error");
+      toast(t("mcp.saveFailed", { error: String(e) }), "error");
     }
   };
   const remove = async (name: string) => {
     setDeleteTarget(null);
     await save(servers.filter((s) => s.name !== name));
-    toast(`Server "${name}" deleted`, "success");
+    toast(t("mcp.deletedToast", { name }), "success");
   };
   const toggle = (name: string) =>
     save(
@@ -106,14 +108,14 @@ export default function MCPPage() {
       setAgent(status);
       if (enable) {
         toast(
-          "Agent access enabled: the aide MCP server was added to your tools' configs (sync to apply)",
+          t("mcp.agentEnabledToast"),
           "success"
         );
       } else {
-        toast("Agent access disabled", "info");
+        toast(t("mcp.agentDisabledToast"), "info");
       }
     } catch (e) {
-      toast(`Failed to toggle agent access: ${e}`, "error");
+      toast(t("mcp.agentToggleFailed", { error: String(e) }), "error");
     } finally {
       setAgentBusy(false);
     }
@@ -125,13 +127,13 @@ export default function MCPPage() {
       const r = await invoke<{ skipped: boolean; message: string }>("sync_mcp_tool", { toolKey: key });
       const toolName = tools.find((t) => t.key === key)?.name ?? key;
       if (r.skipped) {
-        toast(`${toolName}: ${r.message}`, "info");
+        toast(t("mcp.syncSkippedToast", { tool: toolName, message: r.message }), "info");
       } else {
-        toast(`${toolName}: ${r.message}`, "success");
+        toast(t("mcp.syncedToast", { tool: toolName, message: r.message }), "success");
       }
       return r;
     } catch (e) {
-      toast(`Sync to ${key} failed: ${e}`, "error");
+      toast(t("mcp.syncFailedToast", { tool: key, error: String(e) }), "error");
       return { skipped: true, message: String(e) };
     } finally {
       setSyncing(null);
@@ -145,7 +147,7 @@ export default function MCPPage() {
     );
     const ok = results.filter((r) => !r.skipped).length;
     const skipped = results.length - ok;
-    toast(`Sync finished: ${ok} tool${ok !== 1 ? "s" : ""} updated, ${skipped} skipped`, ok > 0 ? "success" : "info");
+    toast(t("mcp.syncAllToast", { ok, skipped }), ok > 0 ? "success" : "info");
   };
 
 
@@ -153,9 +155,9 @@ export default function MCPPage() {
     <div className="h-full flex flex-col">
       <div className="flex items-start justify-between px-6 pt-5 pb-3 border-b border-border shrink-0">
         <div>
-          <h1 className="text-lg font-semibold tracking-tight">MCP Servers</h1>
+          <h1 className="text-lg font-semibold tracking-tight">{t("mcp.title")}</h1>
           <p className="text-xs text-muted-foreground mt-0.5">
-            {servers.length} server{servers.length !== 1 ? "s" : ""} configured
+            {t("mcp.configured", { count: servers.length })}
           </p>
         </div>
         <div className="flex gap-2">
@@ -173,18 +175,18 @@ export default function MCPPage() {
                 toast(
                   total > 0
                     ? results.map((r) => `${r.source}: ${r.imported.length} imported`).join("\n")
-                    : "No MCP configs found",
+                    : t("mcp.scanEmpty"),
                   total > 0 ? "success" : "info"
                 );
               } catch (e) {
-                toast(`Scan failed: ${e}`, "error");
+                toast(t("mcp.scanFailed", { error: String(e) }), "error");
               }
             }}
           >
-            Scan
+            {t("mcp.scan")}
           </Button>
           <Button variant="outline" size="sm" onClick={syncAll}>
-            Sync All
+            {t("mcp.syncAll")}
           </Button>
           <Button
             size="sm"
@@ -194,13 +196,13 @@ export default function MCPPage() {
               setShowAdd(true);
             }}
           >
-            + Add
+            {t("mcp.add")}
           </Button>
         </div>
       </div>
 
       <div className="flex items-center gap-2 px-6 py-2 border-b border-border bg-muted/20 shrink-0">
-        <span className="text-xs text-muted-foreground">Sync to:</span>
+        <span className="text-xs text-muted-foreground">{t("mcp.syncTo")}</span>
         {tools.map((t) => (
           <Button
             key={t.key}
@@ -219,13 +221,13 @@ export default function MCPPage() {
         <div className="flex items-center gap-3 mx-6 mt-4 p-3 rounded-lg border border-border bg-card/60 shrink-0">
           <Bot size={16} className="text-primary shrink-0" />
           <div className="flex-1 min-w-0">
-            <div className="text-sm font-medium">Agent access</div>
+            <div className="text-sm font-medium">{t("mcp.agent.title")}</div>
             <p className="text-[11px] text-muted-foreground truncate">
               {agent.enabled
-                ? "Enabled - agents can install, update and publish skills through aide"
+                ? t("mcp.agent.enabled")
                 : agent.binary_available
-                  ? "Expose aide to your AI agents as an MCP server (install/update/publish skills)"
-                  : "aide-mcp binary not found next to the app"}
+                  ? t("mcp.agent.desc")
+                  : t("mcp.agent.noBinary")}
             </p>
           </div>
           <Switch
@@ -299,7 +301,7 @@ export default function MCPPage() {
                 </div>
                 {s.disabled && (
                   <Badge variant="outline" className="text-[10px] w-fit">
-                    Disabled
+                    {t("mcp.disabled")}
                   </Badge>
                 )}
                 <div className="flex flex-col gap-1 text-xs text-muted-foreground flex-1">
@@ -322,10 +324,10 @@ export default function MCPPage() {
                       </Badge>
                     ))
                   ) : (
-                    <span className="text-primary font-medium">All tools</span>
+                    <span className="text-primary font-medium">{t("mcp.allTools")}</span>
                   )}
                   {s.env && Object.keys(s.env).length > 0 && (
-                    <span>{Object.keys(s.env).length} env</span>
+                    <span>{t("mcp.env", { count: Object.keys(s.env).length })}</span>
                   )}
                 </div>
               </Card>
@@ -338,14 +340,14 @@ export default function MCPPage() {
         <Dialog open onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}>
           <DialogContent className="sm:max-w-[400px]">
             <DialogHeader>
-              <DialogTitle>Delete Server</DialogTitle>
+              <DialogTitle>{t("mcp.deleteTitle")}</DialogTitle>
               <DialogDescription>
-                Delete server <span className="font-mono text-foreground">{deleteTarget}</span>? This cannot be undone.
+                {t("mcp.deleteDesc", { name: deleteTarget })}
               </DialogDescription>
             </DialogHeader>
             <DialogFooter>
-              <Button variant="ghost" size="sm" onClick={() => setDeleteTarget(null)}>Cancel</Button>
-              <Button variant="destructive" size="sm" onClick={() => void remove(deleteTarget)}>Delete</Button>
+              <Button variant="ghost" size="sm" onClick={() => setDeleteTarget(null)}>{t("common.cancel")}</Button>
+              <Button variant="destructive" size="sm" onClick={() => void remove(deleteTarget)}>{t("common.delete")}</Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
@@ -392,6 +394,7 @@ function AddServerDialog({
   onImport: (servers: McpServer[]) => void;
   onClose: () => void;
 }) {
+  const { t } = useTranslation();
   const [formSubmit, setFormSubmit] = useState<(() => void) | null>(null);
   const [importSubmit, setImportSubmit] = useState<(() => void) | null>(null);
 
@@ -407,7 +410,7 @@ function AddServerDialog({
         showCloseButton={false}
       >
         <DialogHeader className="flex-row items-center justify-between shrink-0">
-          <DialogTitle>{server ? "Edit Server" : "Add Server"}</DialogTitle>
+          <DialogTitle>{server ? t("mcp.editor.editTitle") : t("mcp.editor.addTitle")}</DialogTitle>
           <div className="flex bg-muted rounded-lg p-0.5">
             <button
               onClick={() => onModeChange("form")}
@@ -417,7 +420,7 @@ function AddServerDialog({
                   : "text-muted-foreground hover:text-foreground"
               }`}
             >
-              Form
+              {t("mcp.editor.form")}
             </button>
             <button
               onClick={() => onModeChange("json")}
@@ -427,7 +430,7 @@ function AddServerDialog({
                   : "text-muted-foreground hover:text-foreground"
               }`}
             >
-              JSON
+              {t("mcp.editor.json")}
             </button>
           </div>
         </DialogHeader>
@@ -447,10 +450,10 @@ function AddServerDialog({
         </div>
         <div className="flex justify-end gap-2 pt-3 border-t border-border mt-2 shrink-0">
           <Button variant="ghost" onClick={onClose}>
-            Cancel
+            {t("common.cancel")}
           </Button>
           <Button onClick={mode === "form" ? formSubmit! : importSubmit!}>
-            {mode === "form" ? (server ? "Save" : "Add") : "Import"}
+            {mode === "form" ? (server ? t("mcp.editor.save") : t("mcp.editor.add")) : t("mcp.editor.import")}
           </Button>
         </div>
       </DialogContent>
@@ -469,6 +472,7 @@ function ServerForm({
   onSave: (s: McpServer) => void;
   onReady: (fn: () => void) => void;
 }) {
+  const { t } = useTranslation();
   const [name, setName] = useState(server?.name || "");
   const [type, setType] = useState(server?.url ? (server?.headers ? "streamable_http" : "sse") : "stdio");
   const [command, setCommand] = useState(server?.command || "");
@@ -497,10 +501,25 @@ function ServerForm({
 
   const submit = () => {
     if (!name.trim()) return;
+    // Args accept either a JSON array (preserves spaces/quotes) or
+    // whitespace-separated tokens.
+    let parsedArgs: string[] | null = null;
+    const trimmedArgs = args.trim();
+    if (trimmedArgs.startsWith("[")) {
+      try {
+        const arr = JSON.parse(trimmedArgs);
+        if (Array.isArray(arr) && arr.every((x) => typeof x === "string")) {
+          parsedArgs = arr;
+        }
+      } catch {}
+    }
     onSave({
       name: name.trim(),
       command: type === "stdio" ? command.trim() || null : null,
-      args: type === "stdio" && args.trim() ? args.trim().split(/\s+/) : null,
+      args:
+        type === "stdio" && trimmedArgs
+          ? parsedArgs ?? trimmedArgs.split(/\s+/)
+          : null,
       url: type !== "stdio" ? url.trim() || null : null,
       env:
         envEntries.length > 0
@@ -525,20 +544,20 @@ function ServerForm({
   return (
     <div className="space-y-3 py-1">
       <div className="space-y-1">
-        <Label>Name</Label>
+        <Label>{t("mcp.editor.name")}</Label>
         <Input
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="my-server"
+          placeholder={t("mcp.editor.namePlaceholder")}
         />
       </div>
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1">
-          <Label>Type</Label>
+          <Label>{t("mcp.editor.type")}</Label>
           <Select value={type} onValueChange={(v) => v && setType(v)}>
             <SelectTrigger className="w-full">
               <SelectValue>
-                {type === "stdio" ? "STDIO" : type === "sse" ? "SSE" : "Streamable HTTP"}
+                {type === "stdio" ? t("mcp.editor.typeStdio") : type === "sse" ? t("mcp.editor.typeSse") : t("mcp.editor.typeHttp")}
               </SelectValue>
             </SelectTrigger>
             <SelectContent>
@@ -549,37 +568,37 @@ function ServerForm({
           </Select>
         </div>
         <div className="space-y-1">
-          <Label>Description</Label>
+          <Label>{t("mcp.editor.description")}</Label>
           <Input
             value={desc}
             onChange={(e) => setDesc(e.target.value)}
-            placeholder="Optional"
+            placeholder={t("mcp.editor.descriptionPlaceholder")}
           />
         </div>
       </div>
       {type === "stdio" ? (
         <>
           <div className="space-y-1">
-            <Label>Command</Label>
+            <Label>{t("mcp.editor.command")}</Label>
             <Input
               value={command}
               onChange={(e) => setCommand(e.target.value)}
-              placeholder="npx"
+              placeholder={t("mcp.editor.commandPlaceholder")}
             />
           </div>
           <div className="space-y-1">
-            <Label>Args</Label>
+            <Label>{t("mcp.editor.args")}</Label>
             <Input
               value={args}
               onChange={(e) => setArgs(e.target.value)}
-              placeholder="-y @modelcontextprotocol/server-filesystem"
+              placeholder={t("mcp.editor.argsPlaceholder")}
             />
           </div>
         </>
       ) : (
         <>
           <div className="space-y-1">
-            <Label>URL</Label>
+            <Label>{t("mcp.editor.url")}</Label>
             <Input
               value={url}
               onChange={(e) => setUrl(e.target.value)}
@@ -588,7 +607,7 @@ function ServerForm({
           </div>
           {type === "streamable_http" && (
             <div className="space-y-1">
-              <Label>Headers</Label>
+              <Label>{t("mcp.editor.headers")}</Label>
               <div className="space-y-1.5">
                 {headersEntries.map(([k, v], i) => (
                   <div key={i} className="flex gap-1.5 items-center">
@@ -600,7 +619,7 @@ function ServerForm({
                         n[i] = [e.target.value, v];
                         setHeadersEntries(n);
                       }}
-                      placeholder="Header-Name"
+                      placeholder={t("mcp.editor.headerName")}
                     />
                     <Input
                       className="flex-1 font-mono text-xs"
@@ -630,7 +649,7 @@ function ServerForm({
                   className="w-full"
                   onClick={() => setHeadersEntries([...headersEntries, ["", ""]])}
                 >
-                  + Add header
+                  {t("mcp.editor.addHeader")}
                 </Button>
               </div>
             </div>
@@ -638,7 +657,7 @@ function ServerForm({
         </>
       )}
       <div className="space-y-1">
-        <Label>Targets</Label>
+        <Label>{t("mcp.editor.targets")}</Label>
         <div className="flex flex-wrap gap-3">
           {tools.map((t) => (
             <label
@@ -662,7 +681,7 @@ function ServerForm({
       </div>
       {type === "stdio" && (
         <div className="space-y-1">
-          <Label>Environment</Label>
+          <Label>{t("mcp.editor.env")}</Label>
         <div className="space-y-1.5">
           {envEntries.map(([k, v], i) => (
             <div key={i} className="flex gap-1.5 items-center">
@@ -704,7 +723,7 @@ function ServerForm({
             className="w-full"
             onClick={() => setEnvEntries([...envEntries, ["", ""]])}
           >
-            + Add env var
+            {t("mcp.editor.addEnv")}
           </Button>
         </div>
       </div>
@@ -720,6 +739,7 @@ function ImportJson({
   onImport: (servers: McpServer[]) => void;
   onReady: (fn: () => void) => void;
 }) {
+  const { t } = useTranslation();
   const [json, setJson] = useState("");
   const [error, setError] = useState("");
 
@@ -729,7 +749,7 @@ function ImportJson({
     try {
       parsed = JSON.parse(json);
     } catch {
-      setError("Invalid JSON");
+      setError(t("mcp.editor.invalidJson"));
       return;
     }
     let map: Record<string, any> | undefined;
@@ -738,12 +758,12 @@ function ImportJson({
     else if (parsed.mcp && typeof parsed.mcp === "object") map = parsed.mcp;
     else if (typeof parsed === "object" && !Array.isArray(parsed)) map = parsed;
     if (!map) {
-      setError("Expected an object of servers");
+      setError(t("mcp.editor.expectedObject"));
       return;
     }
     const entries = Object.entries(map);
     if (entries.length === 0) {
-      setError("No servers found");
+      setError(t("mcp.editor.noServers"));
       return;
     }
     onImport(
@@ -782,7 +802,7 @@ function ImportJson({
         className="font-mono text-xs min-h-[200px]"
         value={json}
         onChange={(e) => setJson(e.target.value)}
-        placeholder={`{\n  "my-server": {\n    "command": "npx",\n    "args": ["-y", "package"]\n  }\n}`}
+        placeholder={t("mcp.editor.importPlaceholder")}
       />
       {error && <p className="text-sm text-destructive">{error}</p>}
     </div>

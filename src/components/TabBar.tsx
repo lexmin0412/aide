@@ -1,4 +1,5 @@
 import { X } from "lucide-react"
+import { useTranslation } from "react-i18next"
 import type { EditorTab } from "../types"
 
 interface TabBarProps {
@@ -9,6 +10,7 @@ interface TabBarProps {
 }
 
 export function TabBar({ tabs, activeTabPath, onSelect, onClose }: TabBarProps) {
+  const { t } = useTranslation()
   if (tabs.length === 0) return null
   return (
     <div className="flex bg-card/30 border-b border-border overflow-x-auto h-9 shrink-0">
@@ -26,7 +28,7 @@ export function TabBar({ tabs, activeTabPath, onSelect, onClose }: TabBarProps) 
           {tab.is_dirty && <span className="w-1.5 h-1.5 rounded-full bg-primary shrink-0" />}
           <button
             className="p-0.5 rounded text-muted-foreground/60 hover:text-foreground hover:bg-muted shrink-0"
-            title="Close tab"
+            title={t("common.closeTab")}
             onClick={(e) => onClose(tab.path, e)}
           >
             <X size={12} />

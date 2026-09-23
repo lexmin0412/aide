@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react"
+import { useTranslation } from "react-i18next"
 import { invoke } from "@tauri-apps/api/core"
 import { Button } from "@/components/ui/button"
 import {
@@ -23,15 +24,24 @@ interface SyncPanelProps {
   onClose: () => void
 }
 
-const STATUS_LABELS: Record<string, { label: string; className: string }> = {
-  not_installed: { label: "Not Detected", className: "text-muted-foreground" },
-  compatible: { label: "Native", className: "text-emerald-400" },
-  synced: { label: "Linked", className: "text-emerald-400" },
-  has_content: { label: "Pending Merge", className: "text-amber-400" },
-  ready: { label: "Ready", className: "text-primary" },
+const STATUS_KEYS: Record<string, string> = {
+  not_installed: "sync.status.notInstalled",
+  compatible: "sync.status.native",
+  synced: "sync.status.linked",
+  has_content: "sync.status.pendingMerge",
+  ready: "sync.status.ready",
+}
+
+const STATUS_CLASS: Record<string, string> = {
+  not_installed: "text-muted-foreground",
+  compatible: "text-emerald-400",
+  synced: "text-emerald-400",
+  has_content: "text-amber-400",
+  ready: "text-primary",
 }
 
 export function SyncPanel({ open, onClose }: SyncPanelProps) {
+  const { t } = useTranslation()
   const [tools, setTools] = useState<ToolInfo[]>([])
   const [syncing, setSyncing] = useState<Set<string>>(new Set())
   const [results, setResults] = useState<Record<string, SyncResult>>({})
@@ -66,20 +76,19 @@ export function SyncPanel({ open, onClose }: SyncPanelProps) {
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose() }}>
       <DialogContent className="sm:max-w-[500px]">
         <DialogHeader>
-          <DialogTitle>Sync Skills to Tools</DialogTitle>
-          <DialogDescription>
-            Link <code className="font-mono text-[10px] bg-muted px-1 rounded">~/.agents/skills</code> to each
-            tool. Conflicting tool-side copies are backed up to{" "}
-            <code className="font-mono text-[10px] bg-muted px-1 rounded">~/.aide/sync-backup</code>.
-          </DialogDescription>
+          <DialogTitle>{t("sync.title")}</DialogTitle>
+          <DialogDescription>{t("sync.desc")}</DialogDescription>
         </DialogHeader>
         <div className="flex gap-2">
-          <Button size="sm" onClick={syncAll}>Sync All</Button>
-          <Button size="sm" variant="ghost" onClick={refresh}>Refresh</Button>
+          <Button size="sm" onClick={syncAll}>{t("sync.syncAll")}</Button>
+          <Button size="sm" variant="ghost" onClick={refresh}>{t("sync.refresh")}</Button>
         </div>
         <div className="max-h-[420px] overflow-y-auto -mx-1 px-1 space-y-2">
           {tools.map((tool) => {
-            const st = STATUS_LABELS[tool.status] || STATUS_LABELS.ready
+            const st = {
+              label: t(STATUS_KEYS[tool.status] ?? "sync.status.ready"),
+              className: STATUS_CLASS[tool.status] ?? "",
+            }
             const result = results[tool.key]
             const isSyncing = syncing.has(tool.key)
             const canSync = tool.status === "has_content" || tool.status === "ready"
@@ -110,19 +119,19 @@ export function SyncPanel({ open, onClose }: SyncPanelProps) {
                   <div className="mt-1.5 ml-3.5 text-[11px] space-y-0.5">
                     {result.merged.length > 0 && (
                       <div className="text-emerald-400">
-                        Merged {result.merged.length} skill{result.merged.length > 1 ? "s" : ""} into ~/.agents/skills
+                        {t("sync.merged", { count: result.merged.length })}
                       </div>
                     )}
                     {!result.merged.length && !result.backed_up.length && !result.conflicts.length && !result.error && (
-                      <div className="text-emerald-400">Linked</div>
+                      <div className="text-emerald-400">{t("sync.linked")}</div>
                     )}
                     {result.backed_up.length > 0 && (
                       <div className="text-amber-400">
-                        {result.backed_up.length} conflicting skill{result.backed_up.length > 1 ? "s" : ""} backed up to ~/.aide/sync-backup/{tool.key}
+                        {t("sync.backedUp", { count: result.backed_up.length, tool: tool.key })}
                       </div>
                     )}
                     {result.conflicts.length > 0 && (
-                      <div className="text-amber-400">{result.conflicts.length} conflict{result.conflicts.length > 1 ? "s" : ""}</div>
+                      <div className="text-amber-400">{t("sync.conflicts", { count: result.conflicts.length })}</div>
                     )}
                     {result.error && <div className="text-red-400">{result.error}</div>}
                   </div>

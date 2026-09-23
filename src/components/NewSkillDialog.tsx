@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { toast } from "@/lib/toast"
+import { useTranslation } from "react-i18next"
 
 interface NewSkillDialogProps {
   open: boolean
@@ -29,6 +30,7 @@ function toDirName(input: string): string {
 }
 
 export function NewSkillDialog({ open, onClose, onCreated }: NewSkillDialogProps) {
+  const { t } = useTranslation()
   const [name, setName] = useState("")
   const [description, setDescription] = useState("")
   const [tags, setTags] = useState("")
@@ -44,7 +46,7 @@ export function NewSkillDialog({ open, onClose, onCreated }: NewSkillDialogProps
       const home = await invoke<string>("get_home_dir")
       const skillDir = `${home}/.agents/skills/${dirName}`
       if (await invoke<boolean>("file_exists", { path: skillDir })) {
-        toast(`A skill named "${dirName}" already exists`, "error")
+        toast(t("newSkill.exists", { name: dirName }), "error")
         return
       }
       await invoke("create_directory", { path: skillDir })
@@ -67,14 +69,14 @@ export function NewSkillDialog({ open, onClose, onCreated }: NewSkillDialogProps
         .filter((line) => line !== null)
         .join("\n")
       await invoke("write_text_file", { path: `${skillDir}/SKILL.md`, content: frontmatter })
-      toast(`Skill "${dirName}" created`, "success")
+      toast(t("newSkill.created", { name: dirName }), "success")
       onCreated(dirName)
       setName("")
       setDescription("")
       setTags("")
       onClose()
     } catch (e) {
-      toast(`Failed to create skill: ${e}`, "error")
+      toast(t("newSkill.failed", { error: String(e) }), "error")
     } finally {
       setCreating(false)
     }
@@ -84,46 +86,46 @@ export function NewSkillDialog({ open, onClose, onCreated }: NewSkillDialogProps
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose() }}>
       <DialogContent className="sm:max-w-[440px]">
         <DialogHeader>
-          <DialogTitle>New Skill</DialogTitle>
+          <DialogTitle>{t("newSkill.title")}</DialogTitle>
           <DialogDescription>
-            Creates <span className="font-mono">~/.agents/skills/&lt;name&gt;/SKILL.md</span>
+            {t("newSkill.desc")}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3 py-1">
           <div className="space-y-1">
-            <Label>Name</Label>
+            <Label>{t("newSkill.name")}</Label>
             <Input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="my-skill"
+              placeholder={t("newSkill.namePlaceholder")}
               autoFocus
               onKeyDown={(e) => { if (e.key === "Enter") void create() }}
             />
-            {dirName && <p className="text-[10px] text-muted-foreground font-mono">folder: {dirName}</p>}
-            {invalid && <p className="text-[10px] text-destructive">Name must contain letters, numbers or dashes</p>}
+            {dirName && <p className="text-[10px] text-muted-foreground font-mono">{t("newSkill.folder", { name: dirName })}</p>}
+            {invalid && <p className="text-[10px] text-destructive">{t("newSkill.invalidName")}</p>}
           </div>
           <div className="space-y-1">
-            <Label>Description</Label>
+            <Label>{t("newSkill.description")}</Label>
             <Textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="What does this skill do and when should agents use it?"
+              placeholder={t("newSkill.descriptionPlaceholder")}
               className="min-h-[64px] text-xs"
             />
           </div>
           <div className="space-y-1">
-            <Label>Tags</Label>
+            <Label>{t("newSkill.tags")}</Label>
             <Input
               value={tags}
               onChange={(e) => setTags(e.target.value)}
-              placeholder="rust, tooling"
+              placeholder={t("newSkill.tagsPlaceholder")}
             />
           </div>
         </div>
         <DialogFooter>
-          <Button variant="outline" size="sm" onClick={onClose}>Cancel</Button>
+          <Button variant="outline" size="sm" onClick={onClose}>{t("common.cancel")}</Button>
           <Button size="sm" disabled={!dirName || creating} onClick={() => void create()}>
-            {creating ? "Creating..." : "Create"}
+            {creating ? t("newSkill.creating") : t("newSkill.create")}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { toast } from "@/lib/toast"
+import { useTranslation } from "react-i18next"
 import type { SkillInfo } from "../types"
 
 interface RegistrySkill {
@@ -39,6 +40,7 @@ function formatInstalls(n: number): string {
 }
 
 export function MarketDialog({ open, skills, onClose, onInstalled }: MarketDialogProps) {
+  const { t } = useTranslation()
   const [query, setQuery] = useState("")
   const [results, setResults] = useState<RegistrySkill[]>([])
   const [searching, setSearching] = useState(false)
@@ -67,7 +69,7 @@ export function MarketDialog({ open, skills, onClose, onInstalled }: MarketDialo
       invoke<RegistrySkill[]>("search_registry", { query: q })
         .then(setResults)
         .catch((e) => {
-          toast(`Registry search failed: ${e}`, "error")
+          toast(t("market.registrySearchFailed", { error: String(e) }), "error")
           setResults([])
         })
         .finally(() => setSearching(false))
@@ -84,11 +86,11 @@ export function MarketDialog({ open, skills, onClose, onInstalled }: MarketDialo
     setUpdating(skill)
     try {
       const result = await invoke<{ installed: string[] }>("update_skill", { skill })
-      toast(`Updated: ${result.installed.join(", ")}`, "success")
+      toast(t("market.updatedToast", { names: result.installed.join(", ") }), "success")
       setUpdates((prev) => prev.filter((u) => u.skill !== skill))
       onInstalled()
     } catch (e) {
-      toast(`Update failed: ${e}`, "error")
+      toast(t("market.updateFailed", { error: String(e) }), "error")
     } finally {
       setUpdating(null)
     }
@@ -102,17 +104,17 @@ export function MarketDialog({ open, skills, onClose, onInstalled }: MarketDialo
         { id }
       )
       if (result.installed.length > 0) {
-        toast(`Installed: ${result.installed.join(", ")}`, "success")
+        toast(t("market.installedToast", { names: result.installed.join(", ") }), "success")
         onInstalled()
       }
       if (result.skipped.length > 0) {
-        toast(`Already installed: ${result.skipped.join(", ")}`, "info")
+        toast(t("market.skippedToast", { names: result.skipped.join(", ") }), "info")
       }
       if (result.installed.length === 0 && result.skipped.length === 0) {
-        toast("Nothing to install", "info")
+        toast(t("market.nothingToInstall"), "info")
       }
     } catch (e) {
-      toast(`Install failed: ${e}`, "error")
+      toast(t("market.installFailed", { error: String(e) }), "error")
     } finally {
       setInstalling(null)
     }
@@ -123,17 +125,17 @@ export function MarketDialog({ open, skills, onClose, onInstalled }: MarketDialo
       <DialogContent className="sm:max-w-[560px] flex flex-col">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Store size={14} /> Browse skills.sh
+            <Store size={14} /> {t("market.title")}
           </DialogTitle>
           <DialogDescription>
-            Search the community registry and install skills into{" "}
+            {t("market.desc")}{" "}
             <span className="font-mono text-[10px] bg-muted px-1 rounded">~/.agents/skills</span>
           </DialogDescription>
         </DialogHeader>
         {updates.length > 0 && (
           <div className="border border-border rounded-lg p-2.5 space-y-1.5 bg-primary/[0.04]">
             <p className="text-[11px] font-medium text-foreground">
-              {updates.length} update{updates.length > 1 ? "s" : ""} available
+              {t("market.updatesTitle", { count: updates.length })}
             </p>
             {updates.map((u) => (
               <div key={u.skill} className="flex items-center gap-2">
@@ -148,7 +150,7 @@ export function MarketDialog({ open, skills, onClose, onInstalled }: MarketDialo
                   disabled={updating === u.skill}
                   onClick={() => void updateSkill(u.skill)}
                 >
-                  {updating === u.skill ? "Updating..." : "Update"}
+                  {updating === u.skill ? t("market.updating") : t("market.update")}
                 </Button>
               </div>
             ))}
@@ -159,20 +161,18 @@ export function MarketDialog({ open, skills, onClose, onInstalled }: MarketDialo
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search skills (min 2 characters)..."
+            placeholder={t("market.searchPlaceholder")}
             autoFocus
             className="w-full bg-transparent outline-none text-xs placeholder:text-muted-foreground"
           />
         </div>
         <div className="max-h-[360px] overflow-y-auto -mx-1 px-1 space-y-1">
           {query.trim().length < 2 ? (
-            <p className="text-xs text-muted-foreground text-center py-8">
-              Type to search thousands of community skills
-            </p>
+            <p className="text-xs text-muted-foreground text-center py-8">{t("market.typeToSearch")}</p>
           ) : searching && results.length === 0 ? (
-            <p className="text-xs text-muted-foreground text-center py-8">Searching...</p>
+            <p className="text-xs text-muted-foreground text-center py-8">{t("market.searching")}</p>
           ) : results.length === 0 ? (
-            <p className="text-xs text-muted-foreground text-center py-8">No matches</p>
+            <p className="text-xs text-muted-foreground text-center py-8">{t("market.noMatches")}</p>
           ) : (
             results.map((r) => {
               const installed = isInstalled(r.id)
@@ -185,7 +185,7 @@ export function MarketDialog({ open, skills, onClose, onInstalled }: MarketDialo
                     <div className="text-sm font-medium truncate">{r.name}</div>
                     <div className="text-[10px] text-muted-foreground font-mono truncate">{r.source}</div>
                   </div>
-                  <span className="text-[10px] text-muted-foreground shrink-0" title="Total installs">
+                  <span className="text-[10px] text-muted-foreground shrink-0" title={t("market.installs")}>
                     ↓ {formatInstalls(r.installs)}
                   </span>
                   <Button
@@ -197,11 +197,11 @@ export function MarketDialog({ open, skills, onClose, onInstalled }: MarketDialo
                     title={installed ? "Already installed" : undefined}
                   >
                     {installed ? (
-                      <><Check size={11} /> Installed</>
+                      <><Check size={11} /> {t("market.installed")}</>
                     ) : installing === r.id ? (
-                      "Installing..."
+                      t("market.installing")
                     ) : (
-                      <><Download size={11} /> Install</>
+                      <><Download size={11} /> {t("market.install")}</>
                     )}
                   </Button>
                 </div>
@@ -210,7 +210,7 @@ export function MarketDialog({ open, skills, onClose, onInstalled }: MarketDialo
           )}
         </div>
         <p className="text-[10px] text-muted-foreground text-center">
-          Source: skills.sh registry ·{" "}
+          {t("market.sourceLine")}{" "}
           <a
             href="https://skills.sh"
             target="_blank"

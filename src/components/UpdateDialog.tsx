@@ -8,6 +8,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
+import { useTranslation } from "react-i18next"
 
 interface UpdateState {
   version?: string
@@ -19,6 +20,7 @@ interface UpdateState {
 }
 
 export function UpdateDialog({ onClose }: { onClose: () => void }) {
+  const { t } = useTranslation()
   const [upd, setUpd] = useState<UpdateState>({ checking: true, downloading: false, done: false })
   const updateRef = useRef<Update | null>(null)
 
@@ -74,31 +76,31 @@ export function UpdateDialog({ onClose }: { onClose: () => void }) {
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
       <DialogContent className="sm:max-w-[480px]">
         <DialogHeader>
-          <DialogTitle>Update</DialogTitle>
+          <DialogTitle>{t("updates.title")}</DialogTitle>
         </DialogHeader>
         <div className="text-sm space-y-3 py-2">
           {upd.checking ? (
-            <p className="text-muted-foreground">Checking for updates...</p>
+            <p className="text-muted-foreground">{t("updates.checking")}</p>
           ) : upd.error && !upd.version ? (
             <>
-              <p className="text-destructive">Failed to check for updates.</p>
+              <p className="text-destructive">{t("updates.failed")}</p>
               <p className="text-xs text-muted-foreground">{upd.error}</p>
             </>
           ) : !upd.version ? (
-            <p className="text-muted-foreground">aide is up to date.</p>
+            <p className="text-muted-foreground">{t("updates.upToDate")}</p>
           ) : upd.done ? (
             <>
-              <p>Update installed. Restart to apply.</p>
+              <p>{t("updates.installed")}</p>
               {upd.error && <p className="text-destructive text-xs">{upd.error}</p>}
               <div className="flex justify-end gap-2 pt-2">
-                <Button variant="outline" size="sm" onClick={onClose}>Later</Button>
-                <Button size="sm" onClick={handleRelaunch}>Restart</Button>
+                <Button variant="outline" size="sm" onClick={onClose}>{t("updates.later")}</Button>
+                <Button size="sm" onClick={handleRelaunch}>{t("updates.restart")}</Button>
               </div>
             </>
           ) : (
             <>
               <p>
-                A new version is available:{" "}
+                {t("updates.available")}{" "}
                 <span className="font-semibold">{upd.version}</span>
               </p>
               {upd.body && (
@@ -113,8 +115,8 @@ export function UpdateDialog({ onClose }: { onClose: () => void }) {
                 <p className="text-muted-foreground">Downloading and installing...</p>
               ) : (
                 <div className="flex justify-end gap-2 pt-2">
-                  <Button variant="outline" size="sm" onClick={onClose}>Later</Button>
-                  <Button size="sm" onClick={handleInstall}>Download & Install</Button>
+                  <Button variant="outline" size="sm" onClick={onClose}>{t("updates.later")}</Button>
+                  <Button size="sm" onClick={handleInstall}>{t("updates.downloadInstall")}</Button>
                 </div>
               )}
             </>

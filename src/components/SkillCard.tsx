@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next"
 import type { SkillInfo } from "../types"
 import { TagEditor } from "./TagEditor"
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover"
@@ -11,6 +12,7 @@ interface SkillCardProps {
 }
 
 export function SkillCard({ skill, allTags, onClick, onTagsChanged }: SkillCardProps) {
+  const { t } = useTranslation()
   const [showTagEditor, setShowTagEditor] = useState(false)
 
   return (
@@ -23,17 +25,17 @@ export function SkillCard({ skill, allTags, onClick, onTagsChanged }: SkillCardP
         <span className="text-sm font-semibold truncate">{skill.display_name}</span>
       </div>
       <div className="text-xs text-muted-foreground line-clamp-3 flex-1 leading-relaxed">
-        {skill.description || <span className="italic opacity-60">No description</span>}
+        {skill.description || <span className="italic opacity-60">{t("skillCard.noDescription")}</span>}
       </div>
       <div className="flex items-center gap-2 text-[11px] text-muted-foreground/80">
-        <span>{skill.file_count} files</span>
+        <span>{t("skillCard.files", { count: skill.file_count })}</span>
         {skill.is_symlink && (
-          <span className="px-1.5 py-0.5 rounded bg-primary/12 text-primary text-[10px]">symlink</span>
+          <span className="px-1.5 py-0.5 rounded bg-primary/12 text-primary text-[10px]">{t("skillCard.symlink")}</span>
         )}
         {skill.scope && (
           <span
             className="px-1.5 py-0.5 rounded bg-violet-500/15 text-violet-400 text-[10px] truncate max-w-[80px]"
-            title={`Git scope: ${skill.scope}`}
+            title={t("skillCard.scope", { scope: skill.scope })}
           >
             {skill.scope}
           </span>
@@ -55,7 +57,7 @@ export function SkillCard({ skill, allTags, onClick, onTagsChanged }: SkillCardP
                   </>
                 ) : (
                   <span className="text-[10px] text-muted-foreground/50 group-hover:text-muted-foreground transition-colors">
-                    + tags
+                    {t("skillCard.addTags")}
                   </span>
                 )}
               </button>

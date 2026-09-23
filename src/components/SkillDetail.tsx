@@ -18,6 +18,7 @@ import { DirtyCloseDialog } from "./DirtyCloseDialog"
 import { useTabs } from "@/hooks/useTabs"
 import { useSidebarWidth } from "@/hooks/useSidebarWidth"
 import { toast } from "@/lib/toast"
+import { useTranslation } from "react-i18next"
 import { getCurrentWindow } from "@tauri-apps/api/window"
 import type { SkillInfo } from "../types"
 
@@ -29,6 +30,7 @@ interface SkillDetailProps {
 }
 
 export default function SkillDetail({ skill, initialFile, onBack, onDelete }: SkillDetailProps) {
+  const { t } = useTranslation()
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const rootPath = skill.is_symlink && skill.target_path ? skill.target_path : skill.path
   const treeRef = useRef<FileTreeHandle>(null)
@@ -70,13 +72,13 @@ export default function SkillDetail({ skill, initialFile, onBack, onDelete }: Sk
 
   const handleDelete = useCallback(async () => {
     await onDelete(skill.path)
-    toast(`Skill "${skill.display_name}" deleted`, "success")
-  }, [onDelete, skill.path, skill.display_name])
+    toast(t("skillDetail.deleted", { name: skill.display_name }), "success")
+  }, [onDelete, skill.path, skill.display_name, t])
 
   return (
     <div className="h-full flex flex-col">
       <div className="flex items-center gap-3 px-5 py-2.5 border-b border-border bg-card/40">
-        <Button variant="ghost" size="sm" onClick={onBack}>← Back</Button>
+        <Button variant="ghost" size="sm" onClick={onBack}>{t("skillDetail.back")}</Button>
         <div className="flex flex-col min-w-0 flex-1">
           <div className="flex items-center gap-2 min-w-0">
             <span className="text-sm font-medium truncate">
@@ -85,7 +87,7 @@ export default function SkillDetail({ skill, initialFile, onBack, onDelete }: Sk
             {skill.source && (
               <span
                 className="px-1.5 py-0.5 rounded bg-secondary text-[10px] text-muted-foreground font-mono shrink-0 max-w-[160px] truncate"
-                title="Installed from"
+                title={t("skillDetail.source")}
               >
                 {skill.source}
               </span>
@@ -93,7 +95,7 @@ export default function SkillDetail({ skill, initialFile, onBack, onDelete }: Sk
             {skill.scope && (
               <span
                 className="px-1.5 py-0.5 rounded bg-violet-500/15 text-violet-400 text-[10px] shrink-0 max-w-[100px] truncate"
-                title={`Git scope: ${skill.scope}`}
+                title={t("skillCard.scope", { scope: skill.scope })}
               >
                 {skill.scope}
               </span>
@@ -163,8 +165,8 @@ export default function SkillDetail({ skill, initialFile, onBack, onDelete }: Sk
               </Suspense>
             ) : (
               <div className="h-full flex flex-col items-center justify-center gap-1 text-sm text-muted-foreground">
-                <span>Select a file from the sidebar</span>
-                <span className="text-[10px] text-muted-foreground/60 font-mono">↑↓ navigate · Enter open · right-click for menu</span>
+                <span>{t("skillDetail.selectFile")}</span>
+                <span className="text-[10px] text-muted-foreground/60 font-mono">{t("skillDetail.navigateHint")}</span>
               </div>
             )}
           </div>
@@ -183,15 +185,15 @@ export default function SkillDetail({ skill, initialFile, onBack, onDelete }: Sk
       <Dialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Delete Skill</DialogTitle>
+            <DialogTitle>{t("skillDetail.deleteTitle")}</DialogTitle>
             <DialogDescription>
-              Move <span className="font-mono text-foreground">{skill.display_name}</span> to the trash?
-              {skill.is_symlink ? " This will remove the symlink." : " All files in the skill directory will be moved to the trash."}
+              {t("skillDetail.deleteDesc", { name: skill.display_name })}
+              {skill.is_symlink ? t("skillDetail.deleteDescSymlink") : t("skillDetail.deleteDescDir")}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" size="sm" onClick={() => setShowDeleteDialog(false)}>Cancel</Button>
-            <Button variant="destructive" size="sm" onClick={() => { setShowDeleteDialog(false); void handleDelete() }}>Move to Trash</Button>
+            <Button variant="outline" size="sm" onClick={() => setShowDeleteDialog(false)}>{t("common.cancel")}</Button>
+            <Button variant="destructive" size="sm" onClick={() => { setShowDeleteDialog(false); void handleDelete() }}>{t("skillDetail.moveToTrash")}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

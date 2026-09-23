@@ -1,6 +1,6 @@
-import { useState, useCallback, useEffect, useRef, lazy, Suspense } from "react"
+import { useState, useCallback, useEffect, useMemo, useRef, lazy, Suspense } from "react"
 import { invoke } from "@tauri-apps/api/core"
-import { RefreshCw, FilePlus, FolderPlus } from "lucide-react"
+import { RefreshCw, FilePlus, FolderPlus, Search } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { FileTree } from "./FileTree"
 import type { FileTreeHandle } from "./FileTree"
@@ -10,12 +10,15 @@ import { DirtyCloseDialog } from "./DirtyCloseDialog"
 import { useTabs } from "@/hooks/useTabs"
 import { useSidebarWidth } from "@/hooks/useSidebarWidth"
 import { CardGridSkeleton } from "./Skeleton"
+import { useTranslation } from "react-i18next"
 import type { ToolInfo } from "../types"
 
 export function ConfigPanel() {
+  const { t } = useTranslation()
   const [tools, setTools] = useState<ToolInfo[]>([])
   const [loading, setLoading] = useState(true)
   const [activeTool, setActiveTool] = useState<string | null>(null)
+  const [toolFilter, setToolFilter] = useState("")
   const [homeDir, setHomeDir] = useState("")
   const treeRef = useRef<FileTreeHandle>(null)
   const [sidebarWidth, sidebarDivider] = useSidebarWidth("config-panel")
@@ -41,6 +44,12 @@ export function ConfigPanel() {
       .finally(() => setLoading(false))
   }, [])
 
+  // Keep the active tool visible even when the filter would hide it.
+  const visibleTools = useMemo(() => {
+    const q = toolFilter.trim().toLowerCase()
+    if (!q) return tools
+    return tools.filter((t) => t.name.toLowerCase().includes(q) || t.key === activeTool)
+  }, [tools, toolFilter, activeTool])
   const activeToolInfo = tools.find((t) => t.key === activeTool)
   const rootPath = activeToolInfo && homeDir ? homeDir + "/" + activeToolInfo.detect_dir : ""
 
@@ -52,8 +61,19 @@ export function ConfigPanel() {
   return (
     <div className="h-full flex flex-col">
       <div className="flex items-center gap-2 px-4 py-2 border-b border-border bg-card/30 shrink-0 overflow-x-auto">
-        <span className="text-[10px] text-muted-foreground uppercase tracking-wider shrink-0">Tools</span>
-        {tools.map((t) => (
+        <span className="text-[10px] text-muted-foreground uppercase tracking-wider shrink-0">{t("configs.tools")}</span>
+        {tools.length > 10 && (
+          <div className="relative shrink-0">
+            <Search size={11} className="absolute left-1.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <input
+              value={toolFilter}
+              onChange={(e) => setToolFilter(e.target.value)}
+              placeholder={t("configs.toolsPlaceholder", { count: tools.length })}
+              className="h-6 w-32 rounded-md border border-input bg-transparent pl-6 pr-1.5 text-xs outline-none placeholder:text-muted-foreground"
+            />
+          </div>
+        )}
+        {visibleTools.map((t) => (
           <Button
             key={t.key}
             variant={activeTool === t.key ? "secondary" : "ghost"}
@@ -109,15 +129,15 @@ export function ConfigPanel() {
                   </Suspense>
                 ) : (
                   <div className="h-full flex flex-col items-center justify-center gap-1 text-sm text-muted-foreground">
-                    <span>Select a file from the sidebar</span>
-                    <span className="text-[10px] text-muted-foreground/60 font-mono">↑↓ navigate · Enter open · right-click for menu</span>
+                    <span>{t("configs.selectFile")}</span>
+                    <span className="text-[10px] text-muted-foreground/60 font-mono">{t("configs.navigateHint")}</span>
                   </div>
                 )}
               </div>
             </div>
           </>
         ) : (
-          <div className="flex-1 flex items-center justify-center text-sm text-muted-foreground">No tools detected</div>
+          <div className="flex-1 flex items-center justify-center text-sm text-muted-foreground">{t("configs.noTools")}</div>
         )}
       </div>
       {dirtyPendingTab && (

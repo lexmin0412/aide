@@ -13,6 +13,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { toast } from "@/lib/toast"
+import { useTranslation } from "react-i18next"
 import type { FileEntry } from "../types"
 
 interface FileTreeProps {
@@ -108,6 +109,7 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
   { rootPath, onSelectFile, selectedPath, onFileDeleted, onFileRenamed },
   ref
 ) {
+  const { t } = useTranslation()
   const [dirChildren, setDirChildren] = useState<Record<string, FileEntry[]>>({})
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set())
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
@@ -140,9 +142,25 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
   )
 
   useEffect(() => {
-    setDirChildren({}); setExpandedDirs(new Set()); setKeyIndex(-1)
+    setDirChildren({})
+    setKeyIndex(-1)
+    // Restore the previously expanded folders for this skill.
+    let stored: string[] = []
+    try {
+      stored = JSON.parse(localStorage.getItem(`filetree-expanded-${rootPath}`) ?? "[]")
+    } catch {}
+    setExpandedDirs(new Set(stored))
     loadDir(rootPath)
+    for (const dir of stored) {
+      void loadDir(dir)
+    }
+    // Run per skill switch; loadDir is stable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rootPath])
+
+  useEffect(() => {
+    localStorage.setItem(`filetree-expanded-${rootPath}`, JSON.stringify([...expandedDirs]))
+  }, [expandedDirs, rootPath])
 
   const menuRef = useRef<HTMLDivElement>(null)
 
@@ -173,7 +191,7 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
       await loadDir(parentDir)
       onFileRenamed?.(entry.path, newPath)
     } catch (e) {
-      toast(`Failed to rename: ${e}`, "error")
+      toast(t("fileTree.renameFailed", { error: String(e) }), "error")
     }
   }, [loadDir, onFileRenamed])
 
@@ -187,7 +205,7 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
       await loadDir(dirPath)
       onSelectFile(filePath)
     } catch (e) {
-      toast(`Failed to create file: ${e}`, "error")
+      toast(t("fileTree.createFileFailed", { error: String(e) }), "error")
     }
   }, [loadDir, onSelectFile])
 
@@ -200,7 +218,7 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
       setExpandedDirs((prev) => new Set(prev).add(dirPath))
       await loadDir(dirPath)
     } catch (e) {
-      toast(`Failed to create folder: ${e}`, "error")
+      toast(t("fileTree.createFolderFailed", { error: String(e) }), "error")
     }
   }, [loadDir])
 
@@ -213,9 +231,9 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
       const parentDir = deleteTarget.path.substring(0, deleteTarget.path.lastIndexOf("/"))
       await loadDir(parentDir)
       onFileDeleted?.(deleteTarget.path)
-      toast(`Moved "${deleteTarget.name}" to trash`, "success")
+      toast(t("fileTree.movedToast", { name: deleteTarget.name }), "success")
     } catch (e) {
-      toast(`Failed to delete: ${e}`, "error")
+      toast(t("fileTree.deleteFailed", { error: String(e) }), "error")
     }
     setDeleteTarget(null)
   }, [deleteTarget, loadDir, onFileDeleted])
@@ -225,7 +243,7 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
     try {
       await revealItemInDir(entry.path)
     } catch (e) {
-      toast(`Failed to reveal: ${e}`, "error")
+      toast(t("fileTree.revealFailed", { error: String(e) }), "error")
     }
   }, [])
 
@@ -336,7 +354,7 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
                 <div style={{ paddingLeft: `${(depth + 1) * 16 + 24}px` }} className="flex items-center gap-1 px-2 py-0.5">
                   <InlineEditInput
                     initialValue=""
-                    placeholder={editing.type === "newFile" ? "filename" : "folder name"}
+                    placeholder={editing.type === "newFile" ? t("fileTree.filename") : t("fileTree.folderName")}
                     className="h-5 text-xs px-1 py-0 flex-1 min-w-0"
                     onCommit={(name) =>
                       editing.type === "newFile" ? commitNewFile(editing.parentDir, name) : commitNewFolder(editing.parentDir, name)
@@ -402,7 +420,7 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
         <div style={{ paddingLeft: 24 }} className="flex items-center gap-1 px-2 py-0.5">
           <InlineEditInput
             initialValue=""
-            placeholder={editing.type === "newFile" ? "filename" : "folder name"}
+            placeholder={editing.type === "newFile" ? t("fileTree.filename") : t("fileTree.folderName")}
             className="h-5 text-xs px-1 py-0 flex-1 min-w-0"
             onCommit={(name) =>
               editing.type === "newFile" ? commitNewFile(editing.parentDir, name) : commitNewFolder(editing.parentDir, name)
@@ -426,13 +444,13 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
                 className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 hover:bg-accent hover:text-accent-foreground"
                 onClick={() => startNewFile(contextMenu.entry.path)}
               >
-                <FilePlus size={14} /> New File
+                <FilePlus size={14} /> {t("fileTree.newFile")}
               </button>
               <button
                 className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 hover:bg-accent hover:text-accent-foreground"
                 onClick={() => startNewFolder(contextMenu.entry.path)}
               >
-                <FolderPlus size={14} /> New Folder
+                <FolderPlus size={14} /> {t("fileTree.newFolder")}
               </button>
               <div className="my-1 h-px bg-border" />
             </>
@@ -441,19 +459,19 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
             className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 hover:bg-accent hover:text-accent-foreground"
             onClick={() => startRename(contextMenu.entry)}
           >
-            <Pencil size={14} /> Rename
+            <Pencil size={14} /> {t("fileTree.rename")}
           </button>
           <button
             className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 hover:bg-accent hover:text-accent-foreground"
             onClick={() => revealEntry(contextMenu.entry)}
           >
-            <ExternalLink size={14} /> Reveal in Finder
+            <ExternalLink size={14} /> {t("fileTree.reveal")}
           </button>
           <button
             className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-destructive hover:bg-destructive/10"
             onClick={() => { setDeleteTarget(contextMenu.entry); setContextMenu(null) }}
           >
-            <Trash2 size={14} /> Delete
+            <Trash2 size={14} /> {t("fileTree.delete")}
           </button>
         </div>
       )}
@@ -461,15 +479,15 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
       <Dialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Delete {deleteTarget?.is_dir ? "Folder" : "File"}</DialogTitle>
+            <DialogTitle>{t("fileTree.deleteTitle", { type: deleteTarget?.is_dir ? t("fileTree.typeFolder") : t("fileTree.typeFile") })}</DialogTitle>
             <DialogDescription>
-              Move <span className="font-mono text-foreground">{deleteTarget?.name}</span> to the trash?
-              {deleteTarget?.is_dir && " The folder and all contents will be moved to the trash."}
+              {t("fileTree.deleteDesc", { name: deleteTarget?.name })}
+              {deleteTarget?.is_dir && t("fileTree.deleteDescDir")}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" size="sm" onClick={() => setDeleteTarget(null)}>Cancel</Button>
-            <Button variant="destructive" size="sm" onClick={handleDelete}>Move to Trash</Button>
+            <Button variant="outline" size="sm" onClick={() => setDeleteTarget(null)}>{t("common.cancel")}</Button>
+            <Button variant="destructive" size="sm" onClick={handleDelete}>{t("fileTree.moveToTrash")}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from "react"
 import { invoke } from "@tauri-apps/api/core"
 import { Search, FileText } from "lucide-react"
+import { useTranslation } from "react-i18next"
 import {
   Dialog,
   DialogContent,
@@ -25,6 +26,7 @@ interface CommandPaletteProps {
 }
 
 export function CommandPalette({ open, onClose, onSelectSkill, onSelectFileMatch }: CommandPaletteProps) {
+  const { t } = useTranslation()
   const [skills, setSkills] = useState<SkillInfo[]>([])
   const [query, setQuery] = useState("")
   const [focusIndex, setFocusIndex] = useState(0)
@@ -117,19 +119,19 @@ export function CommandPalette({ open, onClose, onSelectSkill, onSelectFileMatch
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={onKeyDown}
-            placeholder="Search skills and their files..."
+            placeholder={t("palette.placeholder")}
             className="w-full bg-transparent outline-none text-sm placeholder:text-muted-foreground"
           />
         </div>
         <div className="max-h-[320px] overflow-y-auto -mx-1">
           {total === 0 ? (
             <p className="text-xs text-muted-foreground text-center py-6">
-              {query.trim().length >= 2 ? "No matches" : "Type to search skills"}
+              {query.trim().length >= 2 ? t("palette.noMatches") : t("palette.typeToSearch")}
             </p>
           ) : (
             <>
               {results.length > 0 && (
-                <p className="px-3 pt-1 pb-0.5 text-[10px] uppercase tracking-wider text-muted-foreground/70">Skills</p>
+                <p className="px-3 pt-1 pb-0.5 text-[10px] uppercase tracking-wider text-muted-foreground/70">{t("palette.skillsGroup")}</p>
               )}
               {results.map((s, i) => (
                 <button
@@ -147,7 +149,7 @@ export function CommandPalette({ open, onClose, onSelectSkill, onSelectFileMatch
                 </button>
               ))}
               {fileMatches.length > 0 && (
-                <p className="px-3 pt-2 pb-0.5 text-[10px] uppercase tracking-wider text-muted-foreground/70">In files</p>
+                <p className="px-3 pt-2 pb-0.5 text-[10px] uppercase tracking-wider text-muted-foreground/70">{t("palette.filesGroup")}</p>
               )}
               {fileMatches.map((m, i) => {
                 const index = results.length + i
@@ -173,7 +175,7 @@ export function CommandPalette({ open, onClose, onSelectSkill, onSelectFileMatch
             </>
           )}
         </div>
-        <p className="text-[10px] text-muted-foreground text-center">↑↓ navigate · Enter open · Esc close</p>
+        <p className="text-[10px] text-muted-foreground text-center">{t("palette.hint")}</p>
       </DialogContent>
     </Dialog>
   )

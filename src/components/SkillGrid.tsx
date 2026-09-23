@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo, useRef } from "react"
+import { useTranslation } from "react-i18next"
 import { invoke } from "@tauri-apps/api/core"
 import { open } from "@tauri-apps/plugin-dialog"
-import { Plus, FolderDown, FolderInput, Store, GitBranch } from "lucide-react"
+import { Plus, FolderDown, FolderInput, Store, GitBranch, RefreshCw } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { SkillCard } from "./SkillCard"
@@ -19,6 +20,7 @@ interface SkillGridProps {
 }
 
 export default function SkillGrid({ onSelectSkill }: SkillGridProps) {
+  const { t } = useTranslation()
   const [skills, setSkills] = useState<SkillInfo[]>([])
   const [loading, setLoading] = useState(true)
   const [syncOpen, setSyncOpen] = useState(false)
@@ -26,6 +28,7 @@ export default function SkillGrid({ onSelectSkill }: SkillGridProps) {
   const [marketOpen, setMarketOpen] = useState(false)
   const [gitOpen, setGitOpen] = useState(false)
   const [updateCount, setUpdateCount] = useState(0)
+  const [refreshing, setRefreshing] = useState(false)
   const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set())
   // Subscribe narrowly: the grid must not re-render on every scroll frame.
   const searchQuery = useSkillStore((s) => s.searchQuery)
@@ -45,15 +48,30 @@ export default function SkillGrid({ onSelectSkill }: SkillGridProps) {
       .catch(() => {})
   }
 
+  // Manual refresh: picks up skills added outside the app (e.g. directly in
+  // ~/.agents/skills) without restarting.
+  const handleRefresh = () => {
+    setRefreshing(true)
+    Promise.all([
+      invoke<SkillInfo[]>("list_skills").then((list) => {
+        setSkills(list)
+        toast(t("skills.refreshed", { count: list.length }), "success")
+      }),
+      invoke<number[]>("check_skill_updates").then((u) => setUpdateCount(u.length)).catch(() => {}),
+    ])
+      .catch((e) => toast(t("skills.refreshFailed", { error: String(e) }), "error"))
+      .finally(() => setRefreshing(false))
+  }
+
   const importSkill = async () => {
-    const selected = await open({ directory: true, multiple: false, title: "Select a skill folder" })
+    const selected = await open({ directory: true, multiple: false, title: t("skills.selectFolder") })
     if (typeof selected !== "string") return
     try {
       const name = await invoke<string>("import_skill", { source: selected })
-      toast(`Skill "${name}" imported`, "success")
+      toast(t("skills.imported", { name }), "success")
       void refresh()
     } catch (e) {
-      toast(`Import failed: ${e}`, "error")
+      toast(t("skills.importFailed", { error: String(e) }), "error")
     }
   }
 
@@ -133,7 +151,7 @@ export default function SkillGrid({ onSelectSkill }: SkillGridProps) {
       <div className="h-full flex flex-col">
         <div className="flex items-center gap-4 px-6 pt-5 pb-4 shrink-0">
           <div className="flex-1">
-            <h1 className="text-lg font-semibold tracking-tight">Skills</h1>
+            <h1 className="text-lg font-semibold tracking-tight">{t("skills.title")}</h1>
           </div>
         </div>
         <div className="flex-1 overflow-y-auto px-6 pb-6">
@@ -147,35 +165,38 @@ export default function SkillGrid({ onSelectSkill }: SkillGridProps) {
     <div className="h-full flex flex-col">
       <div className="flex items-center gap-4 px-6 pt-5 pb-4 shrink-0">
         <div className="flex-1 min-w-0">
-          <h1 className="text-lg font-semibold tracking-tight">Skills</h1>
-          <p className="text-xs text-muted-foreground mt-0.5">{skills.length} installed</p>
+          <h1 className="text-lg font-semibold tracking-tight">{t("skills.title")}</h1>
+          <p className="text-xs text-muted-foreground mt-0.5">{t("skills.installed", { count: skills.length })}</p>
         </div>
         <Input
-          placeholder="Search skills..."
+          placeholder={t("skills.searchPlaceholder")}
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           className="max-w-[260px] h-8 text-xs"
         />
-        <Button variant="outline" size="sm" onClick={() => setGitOpen(true)}>
-          <GitBranch size={13} /> Git
+        <Button variant="outline" size="sm" onClick={handleRefresh} disabled={refreshing} title={t("skills.refresh")}>
+          <RefreshCw size={13} className={refreshing ? "animate-spin" : ""} />
         </Button>
-        <Button variant="outline" size="sm" onClick={() => setSyncOpen(true)}>Sync</Button>
+        <Button variant="outline" size="sm" onClick={() => setGitOpen(true)}>
+          <GitBranch size={13} /> {t("skills.git")}
+        </Button>
+        <Button variant="outline" size="sm" onClick={() => setSyncOpen(true)}>{t("skills.sync")}</Button>
         <Button variant="outline" size="sm" className="relative" onClick={() => setMarketOpen(true)}>
-          <Store size={13} /> Browse
+          <Store size={13} /> {t("skills.browse")}
           {updateCount > 0 && (
             <span
               className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-primary text-primary-foreground text-[9px] font-medium flex items-center justify-center"
-              title={`${updateCount} skill update${updateCount > 1 ? "s" : ""} available`}
+              title={t("skills.updatesBadge", { count: updateCount })}
             >
               {updateCount}
             </span>
           )}
         </Button>
         <Button variant="outline" size="sm" onClick={() => void importSkill()}>
-          <FolderInput size={13} /> Import
+          <FolderInput size={13} /> {t("skills.import")}
         </Button>
         <Button size="sm" onClick={() => setNewOpen(true)}>
-          <Plus size={13} /> New
+          <Plus size={13} /> {t("skills.new")}
         </Button>
       </div>
       {allTags.length > 0 && (
@@ -211,7 +232,7 @@ export default function SkillGrid({ onSelectSkill }: SkillGridProps) {
           <div className="h-full flex flex-col items-center justify-center gap-3 text-center">
             <FolderDown size={36} className="text-primary/40" />
             <div>
-              <p className="text-sm font-medium">No skills yet</p>
+              <p className="text-sm font-medium">{t("skills.empty.title")}</p>
               <p className="text-xs text-muted-foreground mt-1 max-w-[360px]">
                 Skills live in <span className="font-mono">~/.agents/skills</span>, one folder per skill with a
                 SKILL.md file. Create your first skill, or use Sync to link existing tool directories.
@@ -219,10 +240,10 @@ export default function SkillGrid({ onSelectSkill }: SkillGridProps) {
             </div>
             <div className="flex gap-2">
               <Button size="sm" onClick={() => setNewOpen(true)}>
-                <Plus size={13} /> Create your first skill
+                <Plus size={13} /> {t("skills.empty.create")}
               </Button>
               <Button variant="outline" size="sm" onClick={() => void importSkill()}>
-                <FolderInput size={13} /> Import folder
+                <FolderInput size={13} /> {t("skills.empty.import")}
               </Button>
             </div>
           </div>
@@ -242,7 +263,7 @@ export default function SkillGrid({ onSelectSkill }: SkillGridProps) {
               ))}
             </div>
             {searchQuery && filtered.length === 0 && (
-              <div className="text-sm text-muted-foreground text-center mt-12">No skills match "{searchQuery}"</div>
+              <div className="text-sm text-muted-foreground text-center mt-12">{t("skills.noMatch", { query: searchQuery })}</div>
             )}
           </>
         )}

@@ -1,13 +1,15 @@
 import { useEffect, useRef, useMemo, useState } from "react"
 import { EditorView, keymap } from "@codemirror/view"
-import { EditorState } from "@codemirror/state"
+import { EditorState, Compartment, type Extension } from "@codemirror/state"
 import { basicSetup } from "codemirror"
 import { json, jsonParseLinter } from "@codemirror/lang-json"
 import { markdown } from "@codemirror/lang-markdown"
 import { oneDark } from "@codemirror/theme-one-dark"
 import { linter, lintGutter } from "@codemirror/lint"
-import { indentOnInput } from "@codemirror/language"
+import { indentOnInput, LanguageDescription } from "@codemirror/language"
+import { languages } from "@codemirror/language-data"
 import { Eye, Code } from "lucide-react"
+import { useTranslation } from "react-i18next"
 import { renderMarkdown } from "@/lib/markdown"
 import type { EditorTab } from "../types"
 
@@ -17,17 +19,27 @@ interface EditorProps {
   onSave: (path: string, content: string) => void
 }
 
-function detectLanguage(filename: string) {
+// Language support is swapped in through this compartment so lazily-imported
+// grammars can be attached after the view already exists.
+const languageCompartment = new Compartment()
+
+function isMarkdownFile(filename: string) {
+  const name = filename.toLowerCase()
+  return name.endsWith(".md") || name.endsWith(".markdown")
+}
+
+// Languages that need eager loading (or custom config / linting). Everything
+// else is resolved through @codemirror/language-data by filename.
+function detectLanguage(filename: string): Extension | null {
+  if (isMarkdownFile(filename)) return markdown({ codeLanguages: languages })
+
   const ext = filename.split(".").pop()?.toLowerCase()
   switch (ext) {
     case "json":
     case "jsonc":
       return json()
-    case "md":
-    case "markdown":
-      return markdown()
     default:
-      return []
+      return null
   }
 }
 
@@ -42,7 +54,7 @@ function detectExtensions(filename: string, readonly: boolean) {
   ]
 
   const lang = detectLanguage(filename)
-  if (lang) exts.push(lang)
+  exts.push(languageCompartment.of(lang ?? []))
 
   if (filename.endsWith(".json") || filename.endsWith(".jsonc")) {
     exts.push(lintGutter())
@@ -112,6 +124,7 @@ function TextViewer({ tab, onChange, onSave }: EditorProps) {
   const onChangeRef = useRef(onChange)
   const onSaveRef = useRef(onSave)
   const [preview, setPreview] = useState(false)
+  const { t } = useTranslation()
   const [isDark, setIsDark] = useState(() => document.documentElement.classList.contains("dark"))
   onChangeRef.current = onChange
   onSaveRef.current = onSave
@@ -124,7 +137,7 @@ function TextViewer({ tab, onChange, onSave }: EditorProps) {
     return () => observer.disconnect()
   }, [])
 
-  const isMarkdown = tab.name.toLowerCase().endsWith(".md") || tab.name.toLowerCase().endsWith(".markdown")
+  const isMarkdown = isMarkdownFile(tab.name)
   const readonly = !tab.path.match(/\.(md|json|jsonc|yaml|yml|toml|txt|js|ts|jsx|tsx|css|html|sh|env)$/)
 
   const extensions = useMemo(() => {
@@ -166,7 +179,25 @@ function TextViewer({ tab, onChange, onSave }: EditorProps) {
     const view = new EditorView({ state, parent: editorRef.current })
     viewRef.current = view
 
+    // File types without a statically-known grammar (js, ts, css, yaml, sh,
+    // toml, ...) are resolved by filename and imported on demand.
+    let cancelled = false
+    if (!detectLanguage(tab.name)) {
+      const desc = LanguageDescription.matchFilename(languages, tab.name)
+      if (desc) {
+        desc
+          .load()
+          .then((support) => {
+            if (!cancelled && viewRef.current === view) {
+              view.dispatch({ effects: languageCompartment.reconfigure(support) })
+            }
+          })
+          .catch(() => {})
+      }
+    }
+
     return () => {
+      cancelled = true
       stateCache.set(cacheKey, view.state)
       view.destroy()
       viewRef.current = null
@@ -185,20 +216,34 @@ function TextViewer({ tab, onChange, onSave }: EditorProps) {
     }
   }, [tab.content])
 
+  // The CodeMirror keymap is unmounted while previewing; keep Cmd+S working.
+  useEffect(() => {
+    if (!preview) return
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+        e.preventDefault()
+        onChangeRef.current(tab.path, tab.content)
+        onSaveRef.current(tab.path, tab.content)
+      }
+    }
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [preview, tab.path, tab.content])
+
   return (
     <div className="editor-container h-full flex flex-col relative">
       {isMarkdown && (
         <div className="absolute top-2 right-4 z-10 flex gap-0.5 bg-card/90 border border-border rounded-md p-0.5 shadow-sm">
           <button
             className={`p-1 rounded ${!preview ? "bg-secondary text-foreground" : "text-muted-foreground hover:text-foreground"}`}
-            title="Edit"
+            title={t("editor.edit")}
             onClick={() => setPreview(false)}
           >
             <Code size={13} />
           </button>
           <button
             className={`p-1 rounded ${preview ? "bg-secondary text-foreground" : "text-muted-foreground hover:text-foreground"}`}
-            title="Preview"
+            title={t("editor.preview")}
             onClick={() => setPreview(true)}
           >
             <Eye size={13} />

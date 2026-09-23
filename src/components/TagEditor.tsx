@@ -1,6 +1,7 @@
 import { useState, useRef, useMemo, useCallback } from "react"
 import { invoke } from "@tauri-apps/api/core"
 import { toast } from "@/lib/toast"
+import { useTranslation } from "react-i18next"
 
 interface TagEditorProps {
   path: string
@@ -11,6 +12,7 @@ interface TagEditorProps {
 }
 
 export function TagEditor({ path, initialTags, allTags, onSave, onClose }: TagEditorProps) {
+  const { t } = useTranslation()
   const [tags, setTags] = useState<string[]>(initialTags)
   const [input, setInput] = useState("")
   const [saving, setSaving] = useState(false)
@@ -73,7 +75,7 @@ export function TagEditor({ path, initialTags, allTags, onSave, onClose }: TagEd
       onSave(tags)
       onClose()
     } catch (e) {
-      toast(`Failed to save tags: ${e}`, "error")
+      toast(t("tags.saveFailed", { error: String(e) }), "error")
     } finally {
       setSaving(false)
     }
@@ -97,16 +99,17 @@ export function TagEditor({ path, initialTags, allTags, onSave, onClose }: TagEd
           </span>
         ))}
         {tags.length === 0 && (
-          <span className="text-[11px] text-muted-foreground/60">No tags yet</span>
+          <span className="text-[11px] text-muted-foreground/60">{t("tags.noTags")}</span>
         )}
       </div>
       <div className="relative mb-3">
         <input
           ref={inputRef}
+          autoFocus
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Add tag..."
+          placeholder={t("tags.addPlaceholder")}
           className="h-7 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 text-xs transition-colors outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30"
         />
         {suggestions.length > 0 && (
@@ -131,14 +134,14 @@ export function TagEditor({ path, initialTags, allTags, onSave, onClose }: TagEd
           onClick={onClose}
           className="px-3 py-1 text-xs text-muted-foreground hover:text-foreground"
         >
-          Cancel
+          {t("common.cancel")}
         </button>
         <button
           onClick={handleSave}
           disabled={saving}
           className="px-3 py-1 text-xs bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50"
         >
-          {saving ? "Saving..." : "Save"}
+          {saving ? t("common.saving") : t("common.save")}
         </button>
       </div>
     </div>
