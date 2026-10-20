@@ -131,7 +131,7 @@ pnpm tauri build    # Production build + bundling
 - **Editor state** tied to `tab.path` — switching tabs recreates the EditorView; undo history/scroll are preserved via a per-path `EditorState` cache in Editor.tsx
 - **Tab reloads** are mtime-aware: non-dirty tabs only re-read when `get_file_mtime` reports a change
 - **Save flow**: Cmd+S → `onSaveRef.current(path, content)` → `fs::write`
-- **Markdown preview**: `.md` tabs get an edit/preview toggle; renderer is `lib/markdown.ts` (no markdown dependency)
+- **Markdown preview**: `.md` tabs get an edit/preview toggle; renderer is `lib/markdown.ts` (no markdown dependency; supports headings, lists, code fences, blockquotes, GFM tables, images, and inline formatting)
 - **Image viewer**: Editor splits into ImageViewer / TextViewer components (Rules of Hooks)
 - **Skill sync** uses symlinks (junctions on Windows) from `~/.agents/skills` to each tool's skills directory; conflicting tool-side skills are moved to `~/.aide/sync-backup/<tool>/<skill>-<timestamp>` unless overwrite is requested
 - **MCP sync is an upsert merge**: central servers override same-name entries in the tool config, tool-only servers are preserved; central config at `~/.aide/mcp.json`

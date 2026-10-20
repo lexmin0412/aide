@@ -220,3 +220,27 @@ body {
 .markdown-preview a { color: var(--primary); text-decoration: underline; }
 .markdown-preview hr { border: none; border-top: 1px solid var(--border); margin: 1em 0; }
 .markdown-preview img { max-width: 100%; border-radius: 6px; }
+.markdown-preview .md-table-wrap {
+  margin: 0.8em 0;
+  overflow-x: auto;
+}
+.markdown-preview table {
+  border-collapse: collapse;
+  width: max-content;
+  max-width: 100%;
+  font-size: 0.95em;
+}
+.markdown-preview thead th {
+  background: var(--muted);
+  font-weight: 600;
+}
+.markdown-preview th,
+.markdown-preview td {
+  border: 1px solid var(--border);
+  padding: 0.35em 0.75em;
+  text-align: left;
+  vertical-align: top;
+}
+.markdown-preview tbody tr:nth-child(even) {
+  background: color-mix(in oklch, var(--muted) 45%, transparent);
+}

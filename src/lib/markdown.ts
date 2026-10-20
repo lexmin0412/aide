@@ -19,6 +19,70 @@ function renderInline(text: string): string {
   return out
 }
 
+// GitHub-flavored table detection. A table is a row containing at least one
+// pipe immediately followed by a delimiter row of dashes with optional colons.
+const TABLE_DELIMITER_ROW = /^\s*\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*$/
+
+function splitTableRow(line: string): string[] {
+  let row = line.trim()
+  if (row.startsWith("|")) row = row.slice(1)
+  if (row.endsWith("|") && !row.endsWith("\\|")) row = row.slice(0, -1)
+  const cells: string[] = []
+  let cell = ""
+  for (let k = 0; k < row.length; k++) {
+    if (row[k] === "\\" && row[k + 1] === "|") {
+      cell += "|"
+      k++
+      continue
+    }
+    if (row[k] === "|") {
+      cells.push(cell.trim())
+      cell = ""
+      continue
+    }
+    cell += row[k]
+  }
+  cells.push(cell.trim())
+  return cells
+}
+
+function isTableStart(lines: string[], index: number): boolean {
+  const header = lines[index]
+  const delimiter = lines[index + 1]
+  if (!header || !delimiter || !header.includes("|")) return false
+  if (!TABLE_DELIMITER_ROW.test(delimiter)) return false
+  // GFM requires the header and delimiter rows to have the same cell count.
+  return splitTableRow(header).length === splitTableRow(delimiter).length
+}
+
+function renderTable(headerRow: string, delimiterRow: string, bodyRows: string[]): string {
+  const header = splitTableRow(headerRow)
+  const alignments = splitTableRow(delimiterRow).map((spec) => {
+    const left = spec.startsWith(":")
+    const right = spec.endsWith(":")
+    if (left && right) return "center"
+    if (right) return "right"
+    if (left) return "left"
+    return ""
+  })
+  const cell = (tag: "th" | "td", text: string, index: number) => {
+    const align = alignments[index]
+    const attr = align ? ` style="text-align: ${align}"` : ""
+    return `<${tag}${attr}>${renderInline(text)}</${tag}>`
+  }
+  const head = `<thead><tr>${header.map((text, idx) => cell("th", text, idx)).join("")}</tr></thead>`
+  const body = bodyRows.length
+    ? `<tbody>${bodyRows
+        .map((row) => {
+          const cells = splitTableRow(row)
+          const normalized = header.map((_, idx) => cells[idx] ?? "")
+          return `<tr>${normalized.map((text, idx) => cell("td", text, idx)).join("")}</tr>`
+        })
+        .join("")}</tbody>`
+    : ""
+  return `<div class="md-table-wrap"><table>${head}${body}</table></div>`
+}
+
 export function stripFrontmatter(content: string): string {
   const trimmed = content.trim()
   if (!trimmed.startsWith("---")) return content
@@ -115,6 +179,25 @@ export function renderMarkdown(content: string): string {
 
     closeList(listStack)
 
+    // Table (GFM): header row + delimiter row + optional body rows
+    if (isTableStart(lines, i)) {
+      const header = lines[i]
+      const delimiter = lines[i + 1]
+      i += 2
+      const body: string[] = []
+      while (
+        i < lines.length &&
+        lines[i].trim() &&
+        lines[i].includes("|") &&
+        !lines[i].trimStart().startsWith("```")
+      ) {
+        body.push(lines[i])
+        i++
+      }
+      out.push(renderTable(header, delimiter, body))
+      continue
+    }
+
     // Blank line
     if (!line.trim()) {
       i++
@@ -126,6 +209,7 @@ export function renderMarkdown(content: string): string {
     while (
       i < lines.length &&
       lines[i].trim() &&
+      !isTableStart(lines, i) &&
       !/^(#{1,6})\s+/.test(lines[i]) &&
       !lines[i].trimStart().startsWith("```") &&
       !lines[i].trimStart().startsWith(">") &&
