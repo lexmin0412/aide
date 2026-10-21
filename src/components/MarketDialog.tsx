@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { invoke } from "@tauri-apps/api/core"
 import { Search, Download, Check, Store, ExternalLink } from "lucide-react"
 import {
@@ -47,6 +47,8 @@ export function MarketDialog({ open, skills, onClose, onInstalled }: MarketDialo
   const [installing, setInstalling] = useState<string | null>(null)
   const [updates, setUpdates] = useState<SkillUpdateInfo[]>([])
   const [updating, setUpdating] = useState<string | null>(null)
+  // Ignore responses for stale (debounced) queries.
+  const searchSeqRef = useRef(0)
 
   useEffect(() => {
     if (!open) return
@@ -59,6 +61,7 @@ export function MarketDialog({ open, skills, onClose, onInstalled }: MarketDialo
 
   useEffect(() => {
     const q = query.trim()
+    const seq = ++searchSeqRef.current
     if (q.length < 2) {
       setResults([])
       setSearching(false)
@@ -67,12 +70,17 @@ export function MarketDialog({ open, skills, onClose, onInstalled }: MarketDialo
     setSearching(true)
     const timer = setTimeout(() => {
       invoke<RegistrySkill[]>("search_registry", { query: q })
-        .then(setResults)
+        .then((list) => {
+          if (searchSeqRef.current === seq) setResults(list)
+        })
         .catch((e) => {
+          if (searchSeqRef.current !== seq) return
           toast(t("market.registrySearchFailed", { error: String(e) }), "error")
           setResults([])
         })
-        .finally(() => setSearching(false))
+        .finally(() => {
+          if (searchSeqRef.current === seq) setSearching(false)
+        })
     }, 300)
     return () => clearTimeout(timer)
   }, [query])

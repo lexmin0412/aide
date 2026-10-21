@@ -16,6 +16,12 @@ export interface EditorTab {
   is_image?: boolean
   /** File modification time (unix seconds) at last read/save, used to skip redundant reloads. */
   mtime?: number
+  /**
+   * Content revision, bumped whenever the content is replaced from disk (not on
+   * edits or saves). The Editor state cache key includes it so a parked
+   * CodeMirror state is never reused after an external reload.
+   */
+  rev?: number
 }
 
 export interface SkillInfo {
@@ -118,4 +124,22 @@ export interface ToolInfo {
   detect_dir: string
   project_skills: string
   status: string
+}
+
+/** Central-vs-tool MCP config drift for one tool. */
+export interface McpDrift {
+  tool_key: string
+  tool_name: string
+  /** Server names present in the central config but absent from the tool. */
+  missing: string[]
+  /** Server names present in the tool but absent from the central config. */
+  leftover: string[]
+}
+
+/** Per-tool outcome of `cleanup_mcp_drift`. */
+export interface McpCleanupResult {
+  key: string
+  name: string
+  skipped: boolean
+  message: string
 }

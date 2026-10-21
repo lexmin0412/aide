@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from "react"
+import { useState, useEffect, useMemo, useRef, useCallback } from "react"
 import { useTranslation } from "react-i18next"
 import { invoke } from "@tauri-apps/api/core"
 import { open } from "@tauri-apps/plugin-dialog"
@@ -11,6 +11,7 @@ import { NewSkillDialog } from "./NewSkillDialog"
 import { MarketDialog } from "./MarketDialog"
 import { GitSyncDialog } from "./GitSyncDialog"
 import { CardGridSkeleton } from "./Skeleton"
+import { PageError } from "./PageError"
 import { toast } from "@/lib/toast"
 import { useSkillStore } from "../stores/skillStore"
 import type { SkillInfo } from "../types"
@@ -23,6 +24,7 @@ export default function SkillGrid({ onSelectSkill }: SkillGridProps) {
   const { t } = useTranslation()
   const [skills, setSkills] = useState<SkillInfo[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [syncOpen, setSyncOpen] = useState(false)
   const [newOpen, setNewOpen] = useState(false)
   const [marketOpen, setMarketOpen] = useState(false)
@@ -36,11 +38,19 @@ export default function SkillGrid({ onSelectSkill }: SkillGridProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const restoredRef = useRef(false)
 
-  const refresh = () => {
+  const refresh = useCallback(() => {
     return invoke<SkillInfo[]>("list_skills")
-      .then(setSkills)
-      .catch((e) => console.error("Failed to list skills:", e))
-  }
+      .then((list) => {
+        setSkills(list)
+        setError(null)
+      })
+      .catch((e) => setError(String(e)))
+  }, [])
+
+  const retryLoad = useCallback(() => {
+    setLoading(true)
+    void refresh().finally(() => setLoading(false))
+  }, [refresh])
 
   const refreshUpdates = () => {
     invoke<number[]>("check_skill_updates")
@@ -76,12 +86,12 @@ export default function SkillGrid({ onSelectSkill }: SkillGridProps) {
   }
 
   useEffect(() => {
-    refresh().finally(() => setLoading(false))
+    void refresh().finally(() => setLoading(false))
     // Silent check on mount: a dot on the Browse button signals stale skills.
     invoke<number[]>("check_skill_updates")
       .then((u) => setUpdateCount(u.length))
       .catch(() => {})
-  }, [])
+  }, [refresh])
 
   useEffect(() => {
     const el = scrollRef.current
@@ -119,6 +129,10 @@ export default function SkillGrid({ onSelectSkill }: SkillGridProps) {
     return Array.from(tags).sort()
   }, [skills])
 
+  const handleTagsChanged = useCallback((skillPath: string, tags: string[]) => {
+    setSkills((prev) => prev.map((s) => (s.path === skillPath ? { ...s, tags } : s)))
+  }, [])
+
   const toggleTag = (tag: string) => {
     setSelectedTags((prev) => {
       const next = new Set(prev)
@@ -145,6 +159,19 @@ export default function SkillGrid({ onSelectSkill }: SkillGridProps) {
     }
     return result
   }, [skills, searchQuery, selectedTags])
+
+  if (error && !loading) {
+    return (
+      <div className="h-full flex flex-col">
+        <div className="flex items-center gap-4 px-6 pt-5 pb-4 shrink-0">
+          <div className="flex-1">
+            <h1 className="text-lg font-semibold tracking-tight">{t("skills.title")}</h1>
+          </div>
+        </div>
+        <PageError message={t("skills.loadFailed", { error })} onRetry={retryLoad} />
+      </div>
+    )
+  }
 
   if (loading) {
     return (
@@ -222,7 +249,7 @@ export default function SkillGrid({ onSelectSkill }: SkillGridProps) {
               onClick={() => setSelectedTags(new Set())}
               className="px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground"
             >
-              Clear
+              {t("skills.clearFilters")}
             </button>
           )}
         </div>
@@ -234,8 +261,7 @@ export default function SkillGrid({ onSelectSkill }: SkillGridProps) {
             <div>
               <p className="text-sm font-medium">{t("skills.empty.title")}</p>
               <p className="text-xs text-muted-foreground mt-1 max-w-[360px]">
-                Skills live in <span className="font-mono">~/.agents/skills</span>, one folder per skill with a
-                SKILL.md file. Create your first skill, or use Sync to link existing tool directories.
+                {t("skills.empty.desc")}
               </p>
             </div>
             <div className="flex gap-2">
@@ -256,9 +282,7 @@ export default function SkillGrid({ onSelectSkill }: SkillGridProps) {
                   skill={skill}
                   allTags={allTags}
                   onClick={onSelectSkill}
-                  onTagsChanged={(skillPath, tags) => {
-                    setSkills((prev) => prev.map((s) => s.path === skillPath ? { ...s, tags } : s))
-                  }}
+                  onTagsChanged={handleTagsChanged}
                 />
               ))}
             </div>

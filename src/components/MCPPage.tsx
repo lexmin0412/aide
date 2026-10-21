@@ -1,6 +1,14 @@
 import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Power, PowerOff, Pencil, Trash2, XIcon, Bot } from "lucide-react";
+import {
+  Power,
+  PowerOff,
+  Pencil,
+  Trash2,
+  XIcon,
+  Bot,
+  TriangleAlert,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -11,8 +19,18 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "@/lib/toast";
 import { useTranslation } from "react-i18next";
 import { CardGridSkeleton } from "./Skeleton";
+import { PageError } from "./PageError";
 import { Switch } from "@/components/ui/switch";
-import type { AgentServerStatus } from "../types";
+import type {
+  AgentServerStatus,
+  McpCleanupResult,
+  McpDrift,
+} from "../types";
+import {
+  hasMcpDrift,
+  selectDriftTools,
+  summarizeCleanup,
+} from "@/lib/mcpDrift";
 import {
   Select,
   SelectContent,
@@ -53,6 +71,7 @@ export default function MCPPage() {
   const [servers, setServers] = useState<McpServer[]>([]);
   const [tools, setTools] = useState<ToolOption[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<McpServer | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [addMode, setAddMode] = useState<AddMode>("form");
@@ -60,46 +79,108 @@ export default function MCPPage() {
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [agent, setAgent] = useState<AgentServerStatus | null>(null);
   const [agentBusy, setAgentBusy] = useState(false);
+  const [drift, setDrift] = useState<McpDrift[]>([]);
+  const [cleaning, setCleaning] = useState(false);
 
   const load = async () => {
-    const [s, t] = await Promise.all([
-      invoke<McpServer[]>("list_mcp_servers"),
-      invoke<ToolOption[]>("list_mcp_tools"),
-    ]);
-    setServers(s);
-    setTools(t);
+    try {
+      const [s, t, d] = await Promise.all([
+        invoke<McpServer[]>("list_mcp_servers"),
+        invoke<ToolOption[]>("list_mcp_tools"),
+        invoke<McpDrift[]>("get_mcp_drift"),
+      ]);
+      setServers(s);
+      setTools(t);
+      setDrift(d);
+      setError(null);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+  // Drift is auxiliary: a failed refresh keeps the previous snapshot instead of
+  // turning the whole page into a load error.
+  const refreshDrift = async () => {
+    try {
+      setDrift(await invoke<McpDrift[]>("get_mcp_drift"));
+    } catch {
+      // Keep the last known drift state.
+    }
+  };
+  const retryLoad = () => {
+    setLoading(true);
+    void load().finally(() => setLoading(false));
   };
   useEffect(() => {
-    load()
-      .catch((e) => console.error("Failed to load MCP servers:", e))
-      .finally(() => setLoading(false));
+    load().finally(() => setLoading(false));
     invoke<AgentServerStatus>("get_agent_server")
       .then(setAgent)
       .catch(() => {});
   }, []);
 
-  const save = async (updated: McpServer[]) => {
+  const save = async (updated: McpServer[]): Promise<boolean> => {
     try {
       await invoke("save_mcp_servers", { servers: updated });
       setServers(updated);
       setShowAdd(false);
       setEditing(null);
-      toast("MCP servers saved", "success");
+      toast(t("mcp.savedToast"), "success");
+      void refreshDrift();
+      return true;
     } catch (e) {
       toast(t("mcp.saveFailed", { error: String(e) }), "error");
+      return false;
     }
   };
+
+  // Background cleanup so deleted/disabled servers disappear from tool configs.
+  // Runs after the optimistic UI update and never blocks it.
+  const cleanupStale = async () => {
+    try {
+      await invoke<McpCleanupResult[]>("cleanup_mcp_drift");
+      await refreshDrift();
+    } catch (e) {
+      toast(
+        t("mcp.drift.autoCleanFailed", { error: String(e) }),
+        "error"
+      );
+    }
+  };
+
   const remove = async (name: string) => {
     setDeleteTarget(null);
-    await save(servers.filter((s) => s.name !== name));
+    const ok = await save(servers.filter((s) => s.name !== name));
+    if (!ok) return;
     toast(t("mcp.deletedToast", { name }), "success");
+    void cleanupStale();
   };
-  const toggle = (name: string) =>
-    save(
+  const toggle = async (name: string) => {
+    const target = servers.find((s) => s.name === name);
+    const ok = await save(
       servers.map((s) =>
         s.name === name ? { ...s, disabled: !s.disabled } : s
       )
     );
+    // Enabling a server only needs the regular drift refresh from save();
+    // disabling one must also strip it from the tool configs.
+    if (ok && target && !target.disabled) void cleanupStale();
+  };
+
+  const cleanup = async () => {
+    setCleaning(true);
+    try {
+      const results = await invoke<McpCleanupResult[]>("cleanup_mcp_drift");
+      const { updated, skipped } = summarizeCleanup(results);
+      toast(
+        t("mcp.drift.cleaned", { updated, skipped }),
+        updated > 0 ? "success" : "info"
+      );
+      await load();
+    } catch (e) {
+      toast(t("mcp.drift.cleanFailed", { error: String(e) }), "error");
+    } finally {
+      setCleaning(false);
+    }
+  };
 
   const toggleAgent = async (enable: boolean) => {
     setAgentBusy(true);
@@ -148,8 +229,15 @@ export default function MCPPage() {
     const ok = results.filter((r) => !r.skipped).length;
     const skipped = results.length - ok;
     toast(t("mcp.syncAllToast", { ok, skipped }), ok > 0 ? "success" : "info");
+    void refreshDrift();
+  };
+  const syncOne = async (key: string) => {
+    await syncTool(key);
+    void refreshDrift();
   };
 
+  const driftView = selectDriftTools(drift);
+  const driftPresent = hasMcpDrift(drift);
 
   return (
     <div className="h-full flex flex-col">
@@ -166,18 +254,36 @@ export default function MCPPage() {
             size="sm"
             onClick={async () => {
               try {
-                const results = await invoke<{ source: string; imported: string[] }[]>("import_mcp_all");
+                const results = await invoke<
+                  { source: string; imported: string[]; error?: string | null }[]
+                >("import_mcp_all");
                 const total = results.reduce(
                   (n: number, r) => n + r.imported.length,
                   0
                 );
+                const errors = results.filter((r) => r.error);
                 if (total > 0) load();
-                toast(
-                  total > 0
-                    ? results.map((r) => `${r.source}: ${r.imported.length} imported`).join("\n")
-                    : t("mcp.scanEmpty"),
-                  total > 0 ? "success" : "info"
-                );
+                if (total > 0) {
+                  toast(
+                    results
+                      .filter((r) => r.imported.length > 0)
+                      .map((r) => `${r.source}: ${r.imported.length} imported`)
+                      .join("\n"),
+                    "success"
+                  );
+                } else if (errors.length === 0) {
+                  toast(t("mcp.scanEmpty"), "info");
+                }
+                if (errors.length > 0) {
+                  toast(
+                    t("mcp.scanErrors", {
+                      errors: errors
+                        .map((r) => `${r.source}: ${r.error}`)
+                        .join("\n"),
+                    }),
+                    "error"
+                  );
+                }
               } catch (e) {
                 toast(t("mcp.scanFailed", { error: String(e) }), "error");
               }
@@ -210,7 +316,7 @@ export default function MCPPage() {
             size="sm"
             className="h-6 px-2 text-xs"
             disabled={syncing === t.key}
-            onClick={() => syncTool(t.key)}
+            onClick={() => void syncOne(t.key)}
           >
             {syncing === t.key ? "..." : t.name}
           </Button>
@@ -239,11 +345,59 @@ export default function MCPPage() {
       )}
 
       <div className="flex-1 overflow-y-auto p-6">
+        {!loading && !error && driftPresent && (
+          <div
+            role="status"
+            className="mb-3 flex items-start gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3"
+          >
+            <TriangleAlert
+              className="mt-0.5 size-4 shrink-0 text-amber-500 dark:text-amber-400"
+              aria-hidden="true"
+            />
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-medium">{t("mcp.drift.title")}</div>
+              <p className="text-[11px] text-muted-foreground">
+                {t("mcp.drift.desc")}
+              </p>
+              <ul className="mt-1.5 space-y-0.5">
+                {driftView.tools.map((d) => (
+                  <li
+                    key={d.tool_key}
+                    className="text-[11px] text-amber-700 dark:text-amber-300"
+                    title={[...d.missing, ...d.leftover].join(", ")}
+                  >
+                    {t("mcp.drift.tool", {
+                      name: d.tool_name,
+                      missing: d.missing.length,
+                      leftover: d.leftover.length,
+                    })}
+                  </li>
+                ))}
+                {driftView.hiddenCount > 0 && (
+                  <li className="text-[11px] text-muted-foreground">
+                    {t("mcp.drift.more", { count: driftView.hiddenCount })}
+                  </li>
+                )}
+              </ul>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 shrink-0"
+              disabled={cleaning}
+              onClick={() => void cleanup()}
+            >
+              {cleaning ? t("mcp.drift.cleaning") : t("mcp.drift.clean")}
+            </Button>
+          </div>
+        )}
         {loading ? (
           <CardGridSkeleton count={3} />
+        ) : error ? (
+          <PageError message={t("mcp.loadFailed", { error })} onRetry={retryLoad} />
         ) : servers.length === 0 ? (
           <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
-            No MCP servers configured.
+            {t("mcp.empty")}
           </div>
         ) : (
           <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3">
@@ -268,7 +422,7 @@ export default function MCPPage() {
                       variant="ghost"
                       size="icon"
                       className="h-7 w-7"
-                      onClick={() => toggle(s.name)}
+                      onClick={() => void toggle(s.name)}
                       title={s.disabled ? "Enable" : "Disable"}
                     >
                       {s.disabled ? (

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useMemo, useState } from "react"
+import { useEffect, useRef, useMemo, useState, useCallback } from "react"
 import { EditorView, keymap } from "@codemirror/view"
 import { EditorState, Compartment, type Extension } from "@codemirror/state"
 import { basicSetup } from "codemirror"
@@ -11,12 +11,18 @@ import { languages } from "@codemirror/language-data"
 import { Eye, Code } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { renderMarkdown } from "@/lib/markdown"
+import { getCachedState, getLatestStateForPath, setCachedState, stateCacheKey } from "@/lib/editorStateCache"
+import type { DocReader } from "@/hooks/useTabs"
 import type { EditorTab } from "../types"
 
 interface EditorProps {
   tab: EditorTab
-  onChange: (path: string, content: string) => void
-  onSave: (path: string, content: string) => void
+  /** Lightweight channel: fired once when the document becomes dirty. */
+  onDirtyChange: (path: string, dirty: boolean) => void
+  /** Save is content-less on purpose: the hook reads the live document. */
+  onSave: (path: string) => void
+  /** Registers a live-document reader so the tab cache can be flushed/saved. */
+  registerDocSource: (path: string, reader: DocReader | null) => void
 }
 
 // Language support is swapped in through this compartment so lazily-imported
@@ -68,10 +74,6 @@ function detectExtensions(filename: string, readonly: boolean) {
   return exts
 }
 
-// Undo history and scroll survive tab switches: states are parked here keyed by
-// theme + file path and reused when the on-disk/tab content still matches.
-const stateCache = new Map<string, EditorState>()
-
 const lightTheme = EditorView.theme(
   {
     "&": { backgroundColor: "var(--background)", color: "var(--foreground)" },
@@ -108,8 +110,8 @@ function ImageViewer({ tab }: { tab: EditorTab }) {
   )
 }
 
-function MarkdownPreview({ tab }: { tab: EditorTab }) {
-  const html = useMemo(() => renderMarkdown(tab.content), [tab.content])
+function MarkdownPreview({ content }: { content: string }) {
+  const html = useMemo(() => renderMarkdown(content), [content])
   return (
     <div
       className="h-full overflow-y-auto px-8 py-6 text-sm leading-relaxed markdown-preview"
@@ -118,16 +120,27 @@ function MarkdownPreview({ tab }: { tab: EditorTab }) {
   )
 }
 
-function TextViewer({ tab, onChange, onSave }: EditorProps) {
+function TextViewer({ tab, onDirtyChange, onSave, registerDocSource }: EditorProps) {
   const editorRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
-  const onChangeRef = useRef(onChange)
+  const onDirtyChangeRef = useRef(onDirtyChange)
   const onSaveRef = useRef(onSave)
+  const registerDocSourceRef = useRef(registerDocSource)
+  // True once we told the tab store this document is dirty; reset on save, tab
+  // switch and external reload. Prevents one React update per keystroke.
+  const dirtyReportedRef = useRef(false)
+  // Set while dispatching a programmatic (external) document replacement so the
+  // update listener does not mistake it for a user edit.
+  const applyingExternalRef = useRef(false)
+  const tabRef = useRef(tab)
+  tabRef.current = tab
   const [preview, setPreview] = useState(false)
+  const [previewContent, setPreviewContent] = useState("")
   const { t } = useTranslation()
   const [isDark, setIsDark] = useState(() => document.documentElement.classList.contains("dark"))
-  onChangeRef.current = onChange
+  onDirtyChangeRef.current = onDirtyChange
   onSaveRef.current = onSave
+  registerDocSourceRef.current = registerDocSource
 
   useEffect(() => {
     const observer = new MutationObserver(() => {
@@ -151,11 +164,9 @@ function TextViewer({ tab, onChange, onSave }: EditorProps) {
           {
             key: "Mod-s",
             run: () => {
-              if (viewRef.current) {
-                const content = viewRef.current.state.doc.toString()
-                onChangeRef.current(tab.path, content)
-                onSaveRef.current(tab.path, content)
-              }
+              // The hook resolves the live document through the registered
+              // reader, so no content snapshot is passed here.
+              onSaveRef.current(tab.path)
               return true
             },
           },
@@ -163,21 +174,40 @@ function TextViewer({ tab, onChange, onSave }: EditorProps) {
       )
     }
 
-    return exts
-  }, [tab.name, readonly, isDark])
+    // Dirty channel: cheap, fires at most once per dirty episode.
+    exts.push(
+      EditorView.updateListener.of((update) => {
+        if (!update.docChanged || applyingExternalRef.current) return
+        if (dirtyReportedRef.current) return
+        dirtyReportedRef.current = true
+        onDirtyChangeRef.current(tab.path, true)
+      })
+    )
 
+    return exts
+  }, [tab.name, tab.path, readonly, isDark])
+
+  // Create/reuse the view. The parked state for this path is authoritative for
+  // an open tab (it may be newer than tab.content), so edits survive switching.
   useEffect(() => {
     if (!editorRef.current) return
 
-    const cacheKey = (isDark ? "d:" : "l:") + tab.path
-    const cached = stateCache.get(cacheKey)
-    const state =
-      cached && cached.doc.toString() === tab.content
-        ? cached
-        : EditorState.create({ doc: tab.content, extensions })
+    const currentTab = tabRef.current
+    const cacheKey = stateCacheKey(currentTab.path, isDark, currentTab.rev)
+    const cached = getCachedState(cacheKey)
+    let baseDoc = currentTab.content
+    if (!cached && currentTab.is_dirty) {
+      // Theme switch / revision mismatch: fall back to the newest parked doc
+      // instead of the lagging tab.content snapshot.
+      const parked = getLatestStateForPath(currentTab.path)
+      if (parked) baseDoc = parked.doc.toString()
+    }
+    const state = cached ?? EditorState.create({ doc: baseDoc, extensions })
 
     const view = new EditorView({ state, parent: editorRef.current })
     viewRef.current = view
+    dirtyReportedRef.current = currentTab.is_dirty
+    registerDocSourceRef.current(currentTab.path, () => viewRef.current?.state.doc.toString())
 
     // File types without a statically-known grammar (js, ts, css, yaml, sh,
     // toml, ...) are resolved by filename and imported on demand.
@@ -198,37 +228,75 @@ function TextViewer({ tab, onChange, onSave }: EditorProps) {
 
     return () => {
       cancelled = true
-      stateCache.set(cacheKey, view.state)
+      registerDocSourceRef.current(currentTab.path, null)
+      setCachedState(cacheKey, currentTab.path, view.state)
       view.destroy()
       viewRef.current = null
     }
-  }, [tab.path, isDark])
+    // Content/dirty changes are handled by the effects below, through tabRef,
+    // so re-creating the view on them would drop focus and undo history.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab.path, tab.rev, isDark, extensions])
 
+  // External content replacement (mtime reload, save completion): mirror it into
+  // the mounted view when they diverge.
   useEffect(() => {
     const view = viewRef.current
     if (!view) return
 
     const current = view.state.doc.toString()
     if (current !== tab.content) {
-      view.dispatch({
-        changes: { from: 0, to: current.length, insert: tab.content },
-      })
+      applyingExternalRef.current = true
+      try {
+        view.dispatch({
+          changes: { from: 0, to: current.length, insert: tab.content },
+        })
+      } finally {
+        applyingExternalRef.current = false
+      }
     }
   }, [tab.content])
 
-  // The CodeMirror keymap is unmounted while previewing; keep Cmd+S working.
+  // After a save (or a disk reload) the tab is clean again: allow the next edit
+  // to report dirtiness once.
+  useEffect(() => {
+    if (!tab.is_dirty) dirtyReportedRef.current = false
+  }, [tab.is_dirty, tab.path])
+
+  // Switching files always starts in edit mode.
+  useEffect(() => {
+    setPreview(false)
+  }, [tab.path])
+
+  // Keep Cmd+S working while the markdown preview is visible (the CodeMirror
+  // keymap only fires when the editor is focused). The view stays mounted, so
+  // the hook reads the live document.
   useEffect(() => {
     if (!preview) return
     const onKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
-        e.preventDefault()
-        onChangeRef.current(tab.path, tab.content)
-        onSaveRef.current(tab.path, tab.content)
-      }
+      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "s") return
+      // The CodeMirror keymap already handles saves while the editor owns focus.
+      if (editorRef.current?.contains(e.target as Node)) return
+      e.preventDefault()
+      onSaveRef.current(tab.path)
     }
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [preview, tab.path, tab.content])
+  }, [preview, tab.path])
+
+  // CodeMirror measures poorly inside a display:none container; re-measure when
+  // the editor becomes visible again.
+  useEffect(() => {
+    if (preview) return
+    const frame = requestAnimationFrame(() => viewRef.current?.requestMeasure())
+    return () => cancelAnimationFrame(frame)
+  }, [preview])
+
+  const showPreview = useCallback(() => {
+    const view = viewRef.current
+    setPreviewContent(view ? view.state.doc.toString() : tab.content)
+    setPreview(true)
+  }, [tab.content])
 
   return (
     <div className="editor-container h-full flex flex-col relative">
@@ -244,24 +312,26 @@ function TextViewer({ tab, onChange, onSave }: EditorProps) {
           <button
             className={`p-1 rounded ${preview ? "bg-secondary text-foreground" : "text-muted-foreground hover:text-foreground"}`}
             title={t("editor.preview")}
-            onClick={() => setPreview(true)}
+            onClick={showPreview}
           >
             <Eye size={13} />
           </button>
         </div>
       )}
-      {isMarkdown && preview ? (
-        <MarkdownPreview tab={tab} />
-      ) : (
-        <div className="editor-content flex-1 min-h-0" ref={editorRef} />
-      )}
+      {isMarkdown && preview ? <MarkdownPreview content={previewContent} /> : null}
+      <div
+        className={`editor-content flex-1 min-h-0 ${isMarkdown && preview ? "hidden" : ""}`}
+        ref={editorRef}
+      />
     </div>
   )
 }
 
-export function Editor({ tab, onChange, onSave }: EditorProps) {
+export function Editor({ tab, onDirtyChange, onSave, registerDocSource }: EditorProps) {
   if (tab.is_image) return <ImageViewer tab={tab} />
-  return <TextViewer tab={tab} onChange={onChange} onSave={onSave} />
+  return (
+    <TextViewer tab={tab} onDirtyChange={onDirtyChange} onSave={onSave} registerDocSource={registerDocSource} />
+  )
 }
 
 export default Editor

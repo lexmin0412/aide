@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react"
+import { useState, useCallback, useEffect, useRef } from "react"
 import { invoke } from "@tauri-apps/api/core"
 import { check, Update } from "@tauri-apps/plugin-updater"
 import { useTranslation } from "react-i18next"
@@ -92,6 +92,12 @@ export default function App() {
   const [gridKey, setGridKey] = useState(0)
   const [showUpdate, setShowUpdate] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
+  // Pages are mounted on first visit only: startup no longer fires every page's
+  // invokes, while revisits keep their state (they stay mounted but hidden).
+  const [visitedPages, setVisitedPages] = useState<Set<Page>>(() => new Set<Page>(["skills"]))
+  // Leave guards registered by the panes that own editable tabs. Kept in a ref
+  // so navigation callbacks stay identity-stable.
+  const leaveGuards = useRef(new Map<Page, (proceed: () => void) => void>())
 
   const tabs: { key: Page; label: string }[] = [
     { key: "skills", label: t("nav.skills") },
@@ -99,6 +105,26 @@ export default function App() {
     { key: "models", label: t("nav.models") },
     { key: "configs", label: t("nav.configs") },
   ]
+
+  const markVisited = useCallback((target: Page) => {
+    setVisitedPages((prev) => (prev.has(target) ? prev : new Set(prev).add(target)))
+  }, [])
+
+  const requestLeave = useCallback((pageKey: Page, proceed: () => void) => {
+    const guard = leaveGuards.current.get(pageKey)
+    if (guard) guard(proceed)
+    else proceed()
+  }, [])
+
+  const registerSkillsLeaveGuard = useCallback((guard: ((proceed: () => void) => void) | null) => {
+    if (guard) leaveGuards.current.set("skills", guard)
+    else leaveGuards.current.delete("skills")
+  }, [])
+
+  const registerConfigsLeaveGuard = useCallback((guard: ((proceed: () => void) => void) | null) => {
+    if (guard) leaveGuards.current.set("configs", guard)
+    else leaveGuards.current.delete("configs")
+  }, [])
 
   const handleSkillDeleted = useCallback(async (path: string) => {
     await invoke("delete_entry", { path })
@@ -135,15 +161,47 @@ export default function App() {
     }
   }, [])
 
+  // Top navigation: leaving the skills pane or closing/replacing the open skill
+  // detail goes through the shared unsaved-changes guard.
+  const handleNavigate = useCallback(
+    (target: Page) => {
+      const apply = () => {
+        setPage(target)
+        markVisited(target)
+        if (target === "skills") setSelectedSkill(null)
+      }
+      const leavesSkills = page === "skills" && target !== "skills"
+      const closesSkillDetail = selectedSkill !== null && (page === "skills" || target === "skills")
+      if (leavesSkills || closesSkillDetail) requestLeave("skills", apply)
+      else apply()
+    },
+    [page, selectedSkill, requestLeave, markVisited]
+  )
+
   const openSkillFromPalette = useCallback((skill: SkillInfo) => {
-    setPage("skills")
-    setInitialFile(null)
-    setSelectedSkill(skill)
-  }, [])
+    const apply = () => {
+      setPage("skills")
+      markVisited("skills")
+      setInitialFile(null)
+      setSelectedSkill(skill)
+    }
+    if (selectedSkill && selectedSkill.path !== skill.path) requestLeave("skills", apply)
+    else apply()
+  }, [selectedSkill, requestLeave, markVisited])
 
   const openFileFromPalette = useCallback((skill: SkillInfo, filePath: string) => {
-    setPage("skills")
-    setInitialFile(filePath)
+    const apply = () => {
+      setPage("skills")
+      markVisited("skills")
+      setInitialFile(filePath)
+      setSelectedSkill(skill)
+    }
+    if (selectedSkill && selectedSkill.path !== skill.path) requestLeave("skills", apply)
+    else apply()
+  }, [selectedSkill, requestLeave, markVisited])
+
+  const handleSelectSkill = useCallback((skill: SkillInfo) => {
+    setInitialFile(null)
     setSelectedSkill(skill)
   }, [])
 
@@ -158,7 +216,7 @@ export default function App() {
           {tabs.map((t) => (
             <button
               key={t.key}
-              onClick={() => { setPage(t.key); if (t.key === "skills") setSelectedSkill(null) }}
+              onClick={() => handleNavigate(t.key)}
               className={`px-3 h-7 text-xs rounded-md transition-colors ${
                 page === t.key
                   ? "bg-primary/15 text-primary font-medium"
@@ -210,30 +268,38 @@ export default function App() {
         onSelectFileMatch={openFileFromPalette}
       />
       <div className="flex-1 relative overflow-hidden">
-        <div className={`absolute inset-0 ${page === "skills" ? "" : "hidden"}`}>
-          {selectedSkill ? (
-            <SkillDetail
-              skill={selectedSkill}
-              initialFile={initialFile}
-              onBack={() => setSelectedSkill(null)}
-              onDelete={handleSkillDeleted}
-            />
-          ) : (
-            <SkillGrid
-              key={gridKey}
-              onSelectSkill={(s) => { setInitialFile(null); setSelectedSkill(s) }}
-            />
-          )}
-        </div>
-        <div className={`absolute inset-0 ${page === "mcp" ? "" : "hidden"}`}>
-          <MCPPage />
-        </div>
-        <div className={`absolute inset-0 ${page === "models" ? "" : "hidden"}`}>
-          <ModelPage />
-        </div>
-        <div className={`absolute inset-0 ${page === "configs" ? "" : "hidden"}`}>
-          <ConfigPanel />
-        </div>
+        {visitedPages.has("skills") && (
+          <div className={`absolute inset-0 ${page === "skills" ? "" : "hidden"}`}>
+            {selectedSkill ? (
+              <SkillDetail
+                key={selectedSkill.path}
+                skill={selectedSkill}
+                initialFile={initialFile}
+                active={page === "skills"}
+                registerLeaveGuard={registerSkillsLeaveGuard}
+                onBack={() => setSelectedSkill(null)}
+                onDelete={handleSkillDeleted}
+              />
+            ) : (
+              <SkillGrid key={gridKey} onSelectSkill={handleSelectSkill} />
+            )}
+          </div>
+        )}
+        {visitedPages.has("mcp") && (
+          <div className={`absolute inset-0 ${page === "mcp" ? "" : "hidden"}`}>
+            <MCPPage />
+          </div>
+        )}
+        {visitedPages.has("models") && (
+          <div className={`absolute inset-0 ${page === "models" ? "" : "hidden"}`}>
+            <ModelPage />
+          </div>
+        )}
+        {visitedPages.has("configs") && (
+          <div className={`absolute inset-0 ${page === "configs" ? "" : "hidden"}`}>
+            <ConfigPanel active={page === "configs"} registerLeaveGuard={registerConfigsLeaveGuard} />
+          </div>
+        )}
       </div>
       <ToastHost />
     </div>

@@ -45,12 +45,18 @@ export function SyncPanel({ open, onClose }: SyncPanelProps) {
   const [tools, setTools] = useState<ToolInfo[]>([])
   const [syncing, setSyncing] = useState<Set<string>>(new Set())
   const [results, setResults] = useState<Record<string, SyncResult>>({})
+  const [error, setError] = useState<string | null>(null)
 
   const refresh = async () => {
-    const list = await invoke<ToolInfo[]>("check_sync_statuses")
-    setTools(list)
+    try {
+      const list = await invoke<ToolInfo[]>("check_sync_statuses")
+      setTools(list)
+      setError(null)
+    } catch (e) {
+      setError(String(e))
+    }
   }
-  useEffect(() => { if (open) refresh() }, [open])
+  useEffect(() => { if (open) void refresh() }, [open])
 
   const syncOne = async (key: string) => {
     setSyncing((prev) => new Set(prev).add(key))
@@ -81,8 +87,11 @@ export function SyncPanel({ open, onClose }: SyncPanelProps) {
         </DialogHeader>
         <div className="flex gap-2">
           <Button size="sm" onClick={syncAll}>{t("sync.syncAll")}</Button>
-          <Button size="sm" variant="ghost" onClick={refresh}>{t("sync.refresh")}</Button>
+          <Button size="sm" variant="ghost" onClick={() => void refresh()}>{t("sync.refresh")}</Button>
         </div>
+        {error && (
+          <p className="text-xs text-destructive break-words">{t("sync.loadFailed", { error })}</p>
+        )}
         <div className="max-h-[420px] overflow-y-auto -mx-1 px-1 space-y-2">
           {tools.map((tool) => {
             const st = {
@@ -110,7 +119,7 @@ export function SyncPanel({ open, onClose }: SyncPanelProps) {
                     <span className={`text-[11px] ${st.className}`}>{st.label}</span>
                     {canSync && !result?.success && (
                       <Button size="sm" variant="outline" className="h-6 text-xs px-2" disabled={isSyncing} onClick={() => syncOne(tool.key)}>
-                        {isSyncing ? "..." : "Sync"}
+                        {isSyncing ? "..." : t("sync.sync")}
                       </Button>
                     )}
                   </div>

@@ -15,6 +15,7 @@ import type { FileTreeHandle } from "./FileTree"
 const Editor = lazy(() => import("./Editor"))
 import { TabBar } from "./TabBar"
 import { DirtyCloseDialog } from "./DirtyCloseDialog"
+import { UnsavedChangesDialog } from "./UnsavedChangesDialog"
 import { useTabs } from "@/hooks/useTabs"
 import { useSidebarWidth } from "@/hooks/useSidebarWidth"
 import { toast } from "@/lib/toast"
@@ -27,9 +28,13 @@ interface SkillDetailProps {
   initialFile?: string | null
   onBack: () => void
   onDelete: (path: string) => Promise<void>
+  /** True while the skills page is visible; only the active pane owns Cmd+W. */
+  active?: boolean
+  /** App-level registry used to gate navigation away from this pane. */
+  registerLeaveGuard?: (guard: ((proceed: () => void) => void) | null) => void
 }
 
-export default function SkillDetail({ skill, initialFile, onBack, onDelete }: SkillDetailProps) {
+export default function SkillDetail({ skill, initialFile, onBack, onDelete, active = true, registerLeaveGuard }: SkillDetailProps) {
   const { t } = useTranslation()
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const rootPath = skill.is_symlink && skill.target_path ? skill.target_path : skill.path
@@ -39,9 +44,11 @@ export default function SkillDetail({ skill, initialFile, onBack, onDelete }: Sk
   const {
     tabs, activeTabPath, activeTab,
     openFile, closeTab, switchTab,
-    handleEditorChange, refreshAllTabs, handleSave, handleFileDeleted, handleFileRenamed,
+    handleDirtyChange, refreshAllTabs, handleSave, handleFileDeleted, handleFileRenamed,
+    registerDocSource,
     dirtyPendingTab, resolvePendingClose, cancelPendingClose,
-  } = useTabs()
+    pendingLeaveTabs, requestLeave, resolveLeave, cancelLeave,
+  } = useTabs({ active })
 
   useEffect(() => {
     const skillMd = rootPath + "/SKILL.md"
@@ -52,9 +59,9 @@ export default function SkillDetail({ skill, initialFile, onBack, onDelete }: Sk
         void openFile(exists ? target : skillMd)
       })
       .catch(() => {})
-    // Run once when a skill is opened.
+    // Run when a skill is opened and when the palette asks for another file.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rootPath])
+  }, [rootPath, initialFile])
 
   // Reflect the open skill in the window title.
   useEffect(() => {
@@ -64,6 +71,15 @@ export default function SkillDetail({ skill, initialFile, onBack, onDelete }: Sk
       void win.setTitle("aide").catch(() => {})
     }
   }, [skill.display_name])
+
+  // App-level navigation (top nav, palette) is gated through this guard so all
+  // leave paths share one confirmation dialog.
+  useEffect(() => {
+    registerLeaveGuard?.((proceed) => requestLeave(proceed))
+    return () => registerLeaveGuard?.(null)
+  }, [registerLeaveGuard, requestLeave])
+
+  const handleBack = useCallback(() => requestLeave(onBack), [requestLeave, onBack])
 
   const handleRefresh = useCallback(async () => {
     await treeRef.current?.refresh()
@@ -78,7 +94,7 @@ export default function SkillDetail({ skill, initialFile, onBack, onDelete }: Sk
   return (
     <div className="h-full flex flex-col">
       <div className="flex items-center gap-3 px-5 py-2.5 border-b border-border bg-card/40">
-        <Button variant="ghost" size="sm" onClick={onBack}>{t("skillDetail.back")}</Button>
+        <Button variant="ghost" size="sm" onClick={handleBack}>{t("skillDetail.back")}</Button>
         <div className="flex flex-col min-w-0 flex-1">
           <div className="flex items-center gap-2 min-w-0">
             <span className="text-sm font-medium truncate">
@@ -134,21 +150,21 @@ export default function SkillDetail({ skill, initialFile, onBack, onDelete }: Sk
               <button
                 className="p-0.5 text-muted-foreground hover:text-foreground rounded hover:bg-card/60"
                 onClick={() => treeRef.current?.newFile()}
-                title="New File"
+                title={t("fileTree.newFile")}
               >
                 <FilePlus size={12} />
               </button>
               <button
                 className="p-0.5 text-muted-foreground hover:text-foreground rounded hover:bg-card/60"
                 onClick={() => treeRef.current?.newFolder()}
-                title="New Folder"
+                title={t("fileTree.newFolder")}
               >
                 <FolderPlus size={12} />
               </button>
               <button
                 className="p-0.5 text-muted-foreground hover:text-foreground rounded hover:bg-card/60"
                 onClick={handleRefresh}
-                title="Refresh"
+                title={t("common.refresh")}
               >
                 <RefreshCw size={12} />
               </button>
@@ -161,7 +177,12 @@ export default function SkillDetail({ skill, initialFile, onBack, onDelete }: Sk
           <div className="flex-1 overflow-hidden">
             {activeTab ? (
               <Suspense fallback={null}>
-                <Editor tab={activeTab} onChange={handleEditorChange} onSave={handleSave} />
+                <Editor
+                  tab={activeTab}
+                  onDirtyChange={handleDirtyChange}
+                  onSave={handleSave}
+                  registerDocSource={registerDocSource}
+                />
               </Suspense>
             ) : (
               <div className="h-full flex flex-col items-center justify-center gap-1 text-sm text-muted-foreground">
@@ -179,6 +200,15 @@ export default function SkillDetail({ skill, initialFile, onBack, onDelete }: Sk
           onSaveClose={() => void resolvePendingClose(true)}
           onDiscard={() => void resolvePendingClose(false)}
           onCancel={cancelPendingClose}
+        />
+      )}
+
+      {pendingLeaveTabs && (
+        <UnsavedChangesDialog
+          tabs={pendingLeaveTabs}
+          onSave={() => void resolveLeave(true)}
+          onDiscard={() => void resolveLeave(false)}
+          onCancel={cancelLeave}
         />
       )}
 

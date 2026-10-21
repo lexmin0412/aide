@@ -2,7 +2,7 @@ import { useTranslation } from "react-i18next"
 import type { SkillInfo } from "../types"
 import { TagEditor } from "./TagEditor"
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover"
-import { useState } from "react"
+import { memo, useState } from "react"
 
 interface SkillCardProps {
   skill: SkillInfo
@@ -11,7 +11,7 @@ interface SkillCardProps {
   onTagsChanged?: (skillPath: string, tags: string[]) => void
 }
 
-export function SkillCard({ skill, allTags, onClick, onTagsChanged }: SkillCardProps) {
+export const SkillCard = memo(function SkillCard({ skill, allTags, onClick, onTagsChanged }: SkillCardProps) {
   const { t } = useTranslation()
   const [showTagEditor, setShowTagEditor] = useState(false)
 
@@ -76,4 +76,4 @@ export function SkillCard({ skill, allTags, onClick, onTagsChanged }: SkillCardP
       </div>
     </div>
   )
-}
+})

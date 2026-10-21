@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useImperativeHandle, forwardRef, useRef, useMemo } from "react"
+import { useState, useEffect, useCallback, useImperativeHandle, forwardRef, useRef, useMemo, memo } from "react"
 import { invoke } from "@tauri-apps/api/core"
 import { revealItemInDir } from "@tauri-apps/plugin-opener"
 import { FileText, Folder, FolderOpen, Pencil, Trash2, FilePlus, FolderPlus, ExternalLink } from "lucide-react"
@@ -105,7 +105,7 @@ function InlineEditInput({
   )
 }
 
-export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileTree(
+export const FileTree = memo(forwardRef<FileTreeHandle, FileTreeProps>(function FileTree(
   { rootPath, onSelectFile, selectedPath, onFileDeleted, onFileRenamed },
   ref
 ) {
@@ -187,19 +187,32 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
     const newPath = parentDir + "/" + name
     if (newPath === entry.path) return
     try {
+      // Check the destination first: renaming onto an existing file would
+      // overwrite it silently on the backend.
+      const exists = await invoke<boolean>("file_exists", { path: newPath })
+      if (exists) {
+        toast(t("fileTree.alreadyExists", { name }), "error")
+        return
+      }
       await invoke("rename_entry", { oldPath: entry.path, newPath })
       await loadDir(parentDir)
       onFileRenamed?.(entry.path, newPath)
     } catch (e) {
       toast(t("fileTree.renameFailed", { error: String(e) }), "error")
     }
-  }, [loadDir, onFileRenamed])
+  }, [loadDir, onFileRenamed, t])
 
   const commitNewFile = useCallback(async (dirPath: string, name: string) => {
     setEditing(null)
     if (!name) return
     const filePath = dirPath + "/" + name
     try {
+      // create_file would truncate an existing file; refuse before touching it.
+      const exists = await invoke<boolean>("file_exists", { path: filePath })
+      if (exists) {
+        toast(t("fileTree.alreadyExists", { name }), "error")
+        return
+      }
       await invoke("create_file", { path: filePath })
       setExpandedDirs((prev) => new Set(prev).add(dirPath))
       await loadDir(dirPath)
@@ -207,7 +220,7 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
     } catch (e) {
       toast(t("fileTree.createFileFailed", { error: String(e) }), "error")
     }
-  }, [loadDir, onSelectFile])
+  }, [loadDir, onSelectFile, t])
 
   const commitNewFolder = useCallback(async (dirPath: string, name: string) => {
     setEditing(null)
@@ -220,7 +233,7 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
     } catch (e) {
       toast(t("fileTree.createFolderFailed", { error: String(e) }), "error")
     }
-  }, [loadDir])
+  }, [loadDir, t])
 
   const cancelEdit = useCallback(() => setEditing(null), [])
 
@@ -236,7 +249,7 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
       toast(t("fileTree.deleteFailed", { error: String(e) }), "error")
     }
     setDeleteTarget(null)
-  }, [deleteTarget, loadDir, onFileDeleted])
+  }, [deleteTarget, loadDir, onFileDeleted, t])
 
   const revealEntry = useCallback(async (entry: FileEntry) => {
     setContextMenu(null)
@@ -493,4 +506,4 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
       </Dialog>
     </div>
   )
-})
+}))

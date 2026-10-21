@@ -32,6 +32,9 @@ export function CommandPalette({ open, onClose, onSelectSkill, onSelectFileMatch
   const [focusIndex, setFocusIndex] = useState(0)
   const [fileMatches, setFileMatches] = useState<SkillFileMatch[]>([])
   const inputRef = useRef<HTMLInputElement>(null)
+  // Request sequencing: a slow response for an older query must not overwrite
+  // the results of a newer one.
+  const searchSeqRef = useRef(0)
 
   useEffect(() => {
     if (!open) return
@@ -46,14 +49,19 @@ export function CommandPalette({ open, onClose, onSelectSkill, onSelectFileMatch
   // Full-text search across skill files, debounced.
   useEffect(() => {
     const q = query.trim()
+    const seq = ++searchSeqRef.current
     if (q.length < 2) {
       setFileMatches([])
       return
     }
     const timer = setTimeout(() => {
       invoke<SkillFileMatch[]>("search_skills", { query: q })
-        .then(setFileMatches)
-        .catch(() => setFileMatches([]))
+        .then((matches) => {
+          if (searchSeqRef.current === seq) setFileMatches(matches)
+        })
+        .catch(() => {
+          if (searchSeqRef.current === seq) setFileMatches([])
+        })
     }, 150)
     return () => clearTimeout(timer)
   }, [query])
@@ -110,7 +118,7 @@ export function CommandPalette({ open, onClose, onSelectSkill, onSelectFileMatch
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose() }}>
       <DialogContent className="sm:max-w-[520px] top-[20%] translate-y-0" showCloseButton={false}>
         <DialogHeader className="sr-only">
-          <DialogTitle>Search Skills</DialogTitle>
+          <DialogTitle>{t("palette.title")}</DialogTitle>
         </DialogHeader>
         <div className="flex items-center gap-2 border-b border-border pb-2">
           <Search size={14} className="text-muted-foreground shrink-0" />

@@ -7,16 +7,26 @@ import type { FileTreeHandle } from "./FileTree"
 const Editor = lazy(() => import("./Editor"))
 import { TabBar } from "./TabBar"
 import { DirtyCloseDialog } from "./DirtyCloseDialog"
+import { UnsavedChangesDialog } from "./UnsavedChangesDialog"
+import { PageError } from "./PageError"
 import { useTabs } from "@/hooks/useTabs"
 import { useSidebarWidth } from "@/hooks/useSidebarWidth"
 import { CardGridSkeleton } from "./Skeleton"
 import { useTranslation } from "react-i18next"
 import type { ToolInfo } from "../types"
 
-export function ConfigPanel() {
+interface ConfigPanelProps {
+  /** True while the configs page is visible; only the active pane owns Cmd+W. */
+  active?: boolean
+  /** App-level registry used to gate navigation away from this pane. */
+  registerLeaveGuard?: (guard: ((proceed: () => void) => void) | null) => void
+}
+
+export function ConfigPanel({ active = true, registerLeaveGuard }: ConfigPanelProps = {}) {
   const { t } = useTranslation()
   const [tools, setTools] = useState<ToolInfo[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [activeTool, setActiveTool] = useState<string | null>(null)
   const [toolFilter, setToolFilter] = useState("")
   const [homeDir, setHomeDir] = useState("")
@@ -26,11 +36,15 @@ export function ConfigPanel() {
   const {
     tabs, activeTabPath, activeTab,
     openFile, closeTab, switchTab,
-    handleEditorChange, refreshAllTabs, handleSave, handleFileDeleted, handleFileRenamed, clearTabs,
+    handleDirtyChange, refreshAllTabs, handleSave, handleFileDeleted, handleFileRenamed, clearTabs,
+    registerDocSource,
     dirtyPendingTab, resolvePendingClose, cancelPendingClose,
-  } = useTabs()
+    pendingLeaveTabs, requestLeave, resolveLeave, cancelLeave,
+  } = useTabs({ active })
 
-  useEffect(() => {
+  const load = useCallback(() => {
+    setLoading(true)
+    setError(null)
     Promise.all([
       invoke<ToolInfo[]>("list_tools"),
       invoke<string>("get_home_dir"),
@@ -38,11 +52,22 @@ export function ConfigPanel() {
       .then(([list, home]) => {
         setTools(list)
         setHomeDir(home)
-        if (list.length > 0) setActiveTool(list[0].key)
+        if (list.length > 0) setActiveTool((prev) => prev ?? list[0].key)
       })
-      .catch((e) => console.error("Failed to load tools:", e))
+      .catch((e) => setError(String(e)))
       .finally(() => setLoading(false))
   }, [])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  // App-level navigation (top nav) is gated through this guard; tool switching
+  // inside the panel uses the same requestLeave flow below.
+  useEffect(() => {
+    registerLeaveGuard?.((proceed) => requestLeave(proceed))
+    return () => registerLeaveGuard?.(null)
+  }, [registerLeaveGuard, requestLeave])
 
   // Keep the active tool visible even when the filter would hide it.
   const visibleTools = useMemo(() => {
@@ -79,7 +104,10 @@ export function ConfigPanel() {
             variant={activeTool === t.key ? "secondary" : "ghost"}
             size="sm"
             className="h-6 text-xs shrink-0"
-            onClick={() => { setActiveTool(t.key); clearTabs() }}
+            onClick={() => {
+              if (t.key === activeTool) return
+              requestLeave(() => { setActiveTool(t.key); clearTabs() })
+            }}
           >
             {t.name}
           </Button>
@@ -88,6 +116,8 @@ export function ConfigPanel() {
       <div className="flex-1 flex overflow-hidden">
         {loading ? (
           <div className="flex-1 p-6"><CardGridSkeleton count={3} /></div>
+        ) : error ? (
+          <PageError message={t("configs.loadFailed", { error })} onRetry={load} />
         ) : activeToolInfo && rootPath ? (
           <>
             {sidebarDivider}
@@ -98,21 +128,21 @@ export function ConfigPanel() {
                   <button
                     className="p-0.5 text-muted-foreground hover:text-foreground rounded hover:bg-card/60"
                     onClick={() => treeRef.current?.newFile()}
-                    title="New File"
+                    title={t("fileTree.newFile")}
                   >
                     <FilePlus size={12} />
                   </button>
                   <button
                     className="p-0.5 text-muted-foreground hover:text-foreground rounded hover:bg-card/60"
                     onClick={() => treeRef.current?.newFolder()}
-                    title="New Folder"
+                    title={t("fileTree.newFolder")}
                   >
                     <FolderPlus size={12} />
                   </button>
                   <button
                     className="p-0.5 text-muted-foreground hover:text-foreground rounded hover:bg-card/60"
                     onClick={handleRefresh}
-                    title="Refresh"
+                    title={t("common.refresh")}
                   >
                     <RefreshCw size={12} />
                   </button>
@@ -125,7 +155,12 @@ export function ConfigPanel() {
               <div className="flex-1 overflow-hidden">
                 {activeTab ? (
                   <Suspense fallback={null}>
-                    <Editor tab={activeTab} onChange={handleEditorChange} onSave={handleSave} />
+                    <Editor
+                      tab={activeTab}
+                      onDirtyChange={handleDirtyChange}
+                      onSave={handleSave}
+                      registerDocSource={registerDocSource}
+                    />
                   </Suspense>
                 ) : (
                   <div className="h-full flex flex-col items-center justify-center gap-1 text-sm text-muted-foreground">
@@ -146,6 +181,15 @@ export function ConfigPanel() {
           onSaveClose={() => void resolvePendingClose(true)}
           onDiscard={() => void resolvePendingClose(false)}
           onCancel={cancelPendingClose}
+        />
+      )}
+
+      {pendingLeaveTabs && (
+        <UnsavedChangesDialog
+          tabs={pendingLeaveTabs}
+          onSave={() => void resolveLeave(true)}
+          onDiscard={() => void resolveLeave(false)}
+          onCancel={cancelLeave}
         />
       )}
     </div>

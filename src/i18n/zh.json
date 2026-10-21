@@ -5,7 +5,11 @@
     "delete": "删除",
     "close": "关闭",
     "saving": "保存中...",
-    "closeTab": "关闭标签页"
+    "closeTab": "关闭标签页",
+    "retry": "重试",
+    "refresh": "刷新",
+    "enable": "启用",
+    "disable": "禁用"
   },
   "nav": {
     "skills": "技能",
@@ -39,7 +43,9 @@
       "create": "创建第一个技能",
       "import": "导入文件夹"
     },
-    "updatesBadge": "{{count}} 个技能可更新"
+    "updatesBadge": "{{count}} 个技能可更新",
+    "loadFailed": "加载技能失败：{{error}}",
+    "clearFilters": "清除"
   },
   "skillCard": {
     "files": "{{count}} 个文件",
@@ -142,7 +148,9 @@
     "merged": "已合并 {{count}} 个技能到 ~/.agents/skills",
     "linked": "已关联",
     "backedUp": "{{count}} 个冲突技能已备份到 ~/.aide/sync-backup/{{tool}}",
-    "conflicts": "{{count}} 个冲突"
+    "conflicts": "{{count}} 个冲突",
+    "loadFailed": "加载同步状态失败：{{error}}",
+    "sync": "同步"
   },
   "mcp": {
     "title": "MCP 服务器",
@@ -160,6 +168,17 @@
       "desc": "将 aide 作为 MCP 服务器暴露给你的 AI agent（安装/更新/发布技能）",
       "noBinary": "未在应用旁找到 aide-mcp 二进制"
     },
+    "drift": {
+      "title": "MCP 配置漂移",
+      "desc": "部分工具的配置与中央服务器列表不一致。清理会从工具配置中移除已删除或已禁用的服务器。",
+      "tool": "{{name}}：缺少 {{missing}} 个，残留 {{leftover}} 个",
+      "more": "另有 {{count}} 个工具",
+      "clean": "清理",
+      "cleaning": "清理中...",
+      "cleaned": "清理完成：{{updated}} 个工具已更新，{{skipped}} 个跳过",
+      "cleanFailed": "清理失败：{{error}}",
+      "autoCleanFailed": "已保存，但无法从工具配置中移除残留项：{{error}}"
+    },
     "deleteTitle": "删除服务器",
     "deleteDesc": "删除服务器 {{name}}？此操作不可撤销。",
     "deletedToast": "服务器 \"{{name}}\" 已删除",
@@ -172,6 +191,7 @@
     "scanToast": "{{lines}}",
     "scanEmpty": "未找到 MCP 配置",
     "scanFailed": "扫描失败：{{error}}",
+    "scanErrors": "部分工具扫描失败：\n{{errors}}",
     "agentEnabledToast": "Agent 接入已启用：aide MCP 服务器已加入工具配置（同步后生效）",
     "agentDisabledToast": "Agent 接入已关闭",
     "agentToggleFailed": "切换 Agent 接入失败：{{error}}",
@@ -208,7 +228,9 @@
       "add": "添加",
       "save": "保存",
       "import": "导入"
-    }
+    },
+    "loadFailed": "加载 MCP 服务器失败：{{error}}",
+    "empty": "还没有配置 MCP 服务器。"
   },
   "models": {
     "title": "模型",
@@ -260,14 +282,16 @@
       "otherTools": "其他工具不支持文件级模型配置。",
       "nameExample": "个人代理"
     },
-    "deleteFailed": "删除失败：{{error}}"
+    "deleteFailed": "删除失败：{{error}}",
+    "synced": "已同步"
   },
   "configs": {
     "tools": "工具",
     "toolsPlaceholder": "{{count}} 个工具...",
     "selectFile": "从侧边栏选择文件",
     "navigateHint": "↑↓ 导航 · Enter 打开 · 右键菜单",
-    "noTools": "未检测到工具"
+    "noTools": "未检测到工具",
+    "loadFailed": "加载配置文件失败：{{error}}"
   },
   "fileTree": {
     "newFile": "新建文件",
@@ -288,7 +312,8 @@
     "createFileFailed": "创建文件失败：{{error}}",
     "createFolderFailed": "创建文件夹失败：{{error}}",
     "deleteFailed": "删除失败：{{error}}",
-    "revealFailed": "显示失败：{{error}}"
+    "revealFailed": "显示失败：{{error}}",
+    "alreadyExists": "\"{{name}}\" 已存在"
   },
   "tags": {
     "addPlaceholder": "添加标签...",
@@ -301,13 +326,17 @@
     "typeToSearch": "输入以搜索技能",
     "skillsGroup": "技能",
     "filesGroup": "文件内容",
-    "hint": "↑↓ 导航 · Enter 打开 · Esc 关闭"
+    "hint": "↑↓ 导航 · Enter 打开 · Esc 关闭",
+    "title": "搜索技能"
   },
   "dirtyTab": {
     "title": "未保存的修改",
     "desc": "{{name}} 有未保存的修改。关闭前保存？",
     "discard": "放弃",
-    "saveClose": "保存并关闭"
+    "saveClose": "保存并关闭",
+    "leaveTitle": "未保存的修改",
+    "leaveDesc": "{{count}} 个标签页有未保存的修改：{{names}}。离开前保存？",
+    "saveAll": "全部保存"
   },
   "updates": {
     "title": "更新",
@@ -322,7 +351,9 @@
   },
   "editor": {
     "edit": "编辑",
-    "preview": "预览"
+    "preview": "预览",
+    "saveFailed": "保存文件失败：{{error}}",
+    "openFailed": "打开文件失败：{{error}}"
   },
   "theme": {
     "system": "跟随系统",

@@ -72,10 +72,7 @@ export default function ModelPage() {
 
   useEffect(() => {
     load()
-      .catch((e) => {
-        console.error("Failed to load models:", e)
-        toast(t("models.loadFailed", { error: String(e) }), "error")
-      })
+      .catch((e) => toast(t("models.loadFailed", { error: String(e) }), "error"))
       .finally(() => setLoading(false))
   }, [])
 
@@ -225,7 +222,7 @@ export default function ModelPage() {
                           className={x.ok ? "text-emerald-400" : "text-amber-400"}
                           title={x.message}
                         >
-                          {TARGETS.find((t) => t.key === x.tool)?.name ?? x.tool}: {x.ok ? "synced" : x.message}
+                          {TARGETS.find((t) => t.key === x.tool)?.name ?? x.tool}: {x.ok ? t("models.synced") : x.message}
                         </div>
                       ))}
                     </div>
@@ -239,7 +236,7 @@ export default function ModelPage() {
                       title={p.targets.length === 0 ? t("models.noTargets") : undefined}
                       onClick={() => void syncProfile(p)}
                     >
-                      {syncing === p.id ? "Syncing..." : "Sync"}
+                      {syncing === p.id ? t("models.syncing") : t("models.sync")}
                     </Button>
                   </div>
                 </Card>

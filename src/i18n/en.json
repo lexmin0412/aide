@@ -5,7 +5,11 @@
     "delete": "Delete",
     "close": "Close",
     "saving": "Saving...",
-    "closeTab": "Close tab"
+    "closeTab": "Close tab",
+    "retry": "Retry",
+    "refresh": "Refresh",
+    "enable": "Enable",
+    "disable": "Disable"
   },
   "nav": {
     "skills": "Skills",
@@ -39,7 +43,9 @@
       "create": "Create your first skill",
       "import": "Import folder"
     },
-    "updatesBadge": "{{count}} skill updates available"
+    "updatesBadge": "{{count}} skill updates available",
+    "loadFailed": "Failed to load skills: {{error}}",
+    "clearFilters": "Clear"
   },
   "skillCard": {
     "files": "{{count}} files",
@@ -142,7 +148,9 @@
     "merged": "Merged {{count}} skill(s) into ~/.agents/skills",
     "linked": "Linked",
     "backedUp": "{{count}} conflicting skill(s) backed up to ~/.aide/sync-backup/{{tool}}",
-    "conflicts": "{{count}} conflict(s)"
+    "conflicts": "{{count}} conflict(s)",
+    "loadFailed": "Failed to load sync status: {{error}}",
+    "sync": "Sync"
   },
   "mcp": {
     "title": "MCP Servers",
@@ -160,6 +168,17 @@
       "desc": "Expose aide to your AI agents as an MCP server (install/update/publish skills)",
       "noBinary": "aide-mcp binary not found next to the app"
     },
+    "drift": {
+      "title": "MCP config drift",
+      "desc": "Some tool configs still differ from the central server list. Cleaning up removes deleted or disabled servers from them.",
+      "tool": "{{name}}: {{missing}} missing, {{leftover}} leftover",
+      "more": "+{{count}} more tool(s)",
+      "clean": "Clean up",
+      "cleaning": "Cleaning...",
+      "cleaned": "Cleanup finished: {{updated}} tool(s) updated, {{skipped}} skipped",
+      "cleanFailed": "Cleanup failed: {{error}}",
+      "autoCleanFailed": "Saved, but stale tool config entries could not be removed: {{error}}"
+    },
     "deleteTitle": "Delete Server",
     "deleteDesc": "Delete server {{name}}? This cannot be undone.",
     "deletedToast": "Server \"{{name}}\" deleted",
@@ -172,6 +191,7 @@
     "scanToast": "{{lines}}",
     "scanEmpty": "No MCP configs found",
     "scanFailed": "Scan failed: {{error}}",
+    "scanErrors": "Some tools could not be scanned:\n{{errors}}",
     "agentEnabledToast": "Agent access enabled: the aide MCP server was added to your tools' configs (sync to apply)",
     "agentDisabledToast": "Agent access disabled",
     "agentToggleFailed": "Failed to toggle agent access: {{error}}",
@@ -208,7 +228,9 @@
       "add": "Add",
       "save": "Save",
       "import": "Import"
-    }
+    },
+    "loadFailed": "Failed to load MCP servers: {{error}}",
+    "empty": "No MCP servers configured."
   },
   "models": {
     "title": "Models",
@@ -260,14 +282,16 @@
       "otherTools": "Other tools do not expose file-based model configuration.",
       "nameExample": "Personal proxy"
     },
-    "deleteFailed": "Failed to delete: {{error}}"
+    "deleteFailed": "Failed to delete: {{error}}",
+    "synced": "synced"
   },
   "configs": {
     "tools": "Tools",
     "toolsPlaceholder": "{{count}} tools...",
     "selectFile": "Select a file from the sidebar",
     "navigateHint": "↑↓ navigate · Enter open · right-click for menu",
-    "noTools": "No tools detected"
+    "noTools": "No tools detected",
+    "loadFailed": "Failed to load config files: {{error}}"
   },
   "fileTree": {
     "newFile": "New File",
@@ -288,7 +312,8 @@
     "createFileFailed": "Failed to create file: {{error}}",
     "createFolderFailed": "Failed to create folder: {{error}}",
     "deleteFailed": "Failed to delete: {{error}}",
-    "revealFailed": "Failed to reveal: {{error}}"
+    "revealFailed": "Failed to reveal: {{error}}",
+    "alreadyExists": "\"{{name}}\" already exists"
   },
   "tags": {
     "addPlaceholder": "Add tag...",
@@ -301,13 +326,17 @@
     "typeToSearch": "Type to search skills",
     "skillsGroup": "Skills",
     "filesGroup": "In files",
-    "hint": "↑↓ navigate · Enter open · Esc close"
+    "hint": "↑↓ navigate · Enter open · Esc close",
+    "title": "Search Skills"
   },
   "dirtyTab": {
     "title": "Unsaved Changes",
     "desc": "{{name}} has unsaved changes. Save before closing?",
     "discard": "Discard",
-    "saveClose": "Save & Close"
+    "saveClose": "Save & Close",
+    "leaveTitle": "Unsaved Changes",
+    "leaveDesc": "{{count}} tab(s) have unsaved changes: {{names}}. Save before leaving?",
+    "saveAll": "Save All"
   },
   "updates": {
     "title": "Update",
@@ -322,7 +351,9 @@
   },
   "editor": {
     "edit": "Edit",
-    "preview": "Preview"
+    "preview": "Preview",
+    "saveFailed": "Failed to save file: {{error}}",
+    "openFailed": "Failed to open file: {{error}}"
   },
   "theme": {
     "system": "system",

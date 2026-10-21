@@ -1,3 +1,4 @@
+import { memo } from "react"
 import { X } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import type { EditorTab } from "../types"
@@ -9,7 +10,7 @@ interface TabBarProps {
   onClose: (path: string, e?: React.MouseEvent) => void
 }
 
-export function TabBar({ tabs, activeTabPath, onSelect, onClose }: TabBarProps) {
+export const TabBar = memo(function TabBar({ tabs, activeTabPath, onSelect, onClose }: TabBarProps) {
   const { t } = useTranslation()
   if (tabs.length === 0) return null
   return (
@@ -37,4 +38,4 @@ export function TabBar({ tabs, activeTabPath, onSelect, onClose }: TabBarProps) 
       ))}
     </div>
   )
-}
+})
