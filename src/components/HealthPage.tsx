@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   Cpu,
   FileText,
+  History,
   RefreshCw,
   ScrollText,
   Server,
@@ -13,6 +14,16 @@ import {
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { CardGridSkeleton } from "./Skeleton"
 import { PageError } from "./PageError"
 import { toast } from "@/lib/toast"
@@ -25,7 +36,20 @@ import {
   normalizeTimestamp,
   toolsNeedingAttention,
 } from "@/lib/health"
-import type { DoctorReport, McpCleanupResult, ModelProfileSyncResult, SkillUpdateInfo } from "../types"
+import {
+  DEFAULT_SNAPSHOT_LABEL,
+  formatSnapshotTime,
+  latestSnapshots,
+  summarizeRestoreResult,
+} from "@/lib/snapshots"
+import type {
+  DoctorReport,
+  McpCleanupResult,
+  ModelProfileSyncResult,
+  RestoreResult,
+  SkillUpdateInfo,
+  SnapshotMeta,
+} from "../types"
 
 type RepairAction = "tools" | "updates" | "mcp" | "models" | "refresh"
 
@@ -65,6 +89,15 @@ export default function HealthPage({ active = true }: { active?: boolean } = {})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<RepairAction | null>(null)
+  // Snapshots section state.
+  const [snapshots, setSnapshots] = useState<SnapshotMeta[] | null>(null)
+  const [snapshotsError, setSnapshotsError] = useState<string | null>(null)
+  const [snapshotsReloadKey, setSnapshotsReloadKey] = useState(0)
+  const [snapshotBusy, setSnapshotBusy] = useState<"create" | "restore" | "delete" | null>(null)
+  const [createOpen, setCreateOpen] = useState(false)
+  const [snapshotLabel, setSnapshotLabel] = useState("")
+  const [confirmRestore, setConfirmRestore] = useState<SnapshotMeta | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState<SnapshotMeta | null>(null)
 
   const refreshReport = useCallback(async (): Promise<DoctorReport | null> => {
     try {
@@ -109,6 +142,41 @@ export default function HealthPage({ active = true }: { active?: boolean } = {})
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false))
   }, [])
+
+  // Load the snapshot list whenever the page becomes visible or an action asks
+  // for a refresh.
+  useEffect(() => {
+    if (!active) return
+    let cancelled = false
+    const loadSnapshots = async () => {
+      try {
+        const list = await invoke<SnapshotMeta[]>("list_snapshots")
+        if (cancelled) return
+        setSnapshots(list)
+        setSnapshotsError(null)
+      } catch (e) {
+        if (!cancelled) setSnapshotsError(String(e))
+      }
+    }
+    void loadSnapshots()
+    return () => {
+      cancelled = true
+    }
+  }, [active, snapshotsReloadKey])
+
+  // Periodic freshness: refresh the doctor report every 60s while the page is
+  // visible. Skipped while a dialog is open or a repair is running (the page
+  // must not shift under the user) and while the window is hidden.
+  useEffect(() => {
+    if (!active) return
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "hidden") return
+      if (busy !== null) return
+      if (document.querySelector('[data-slot="dialog-content"]')) return
+      void refreshReport()
+    }, 60_000)
+    return () => window.clearInterval(timer)
+  }, [active, busy, refreshReport])
 
   // Runs one repair command, toasts the outcome and always reloads the report so
   // the page reflects the post-repair state.
@@ -167,6 +235,57 @@ export default function HealthPage({ active = true }: { active?: boolean } = {})
       const count = results.reduce((sum, item) => sum + item.results.length, 0)
       return t("health.actions.modelsSynced", { count })
     })
+  }
+
+  const refreshSnapshots = () => setSnapshotsReloadKey((key) => key + 1)
+
+  const createSnapshot = async () => {
+    setSnapshotBusy("create")
+    try {
+      const label = snapshotLabel.trim() || DEFAULT_SNAPSHOT_LABEL
+      const created = await invoke<SnapshotMeta>("create_snapshot", { label })
+      toast(t("snapshots.createdToast", { label: created.label }), "success")
+      setCreateOpen(false)
+      setSnapshotLabel("")
+      refreshSnapshots()
+    } catch (e) {
+      toast(t("snapshots.actionFailed", { error: String(e) }), "error")
+    } finally {
+      setSnapshotBusy(null)
+    }
+  }
+
+  const restoreSnapshot = async (snapshot: SnapshotMeta) => {
+    setConfirmRestore(null)
+    setSnapshotBusy("restore")
+    try {
+      const result = await invoke<RestoreResult>("restore_snapshot", { id: snapshot.id })
+      const summary = summarizeRestoreResult(result)
+      toast(
+        t("snapshots.restoredToast", { files: summary.restoredFiles, drift: summary.skillDrift }),
+        summary.hasDrift ? "info" : "success"
+      )
+      refreshSnapshots()
+      void refreshReport()
+    } catch (e) {
+      toast(t("snapshots.actionFailed", { error: String(e) }), "error")
+    } finally {
+      setSnapshotBusy(null)
+    }
+  }
+
+  const deleteSnapshot = async (snapshot: SnapshotMeta) => {
+    setConfirmDelete(null)
+    setSnapshotBusy("delete")
+    try {
+      await invoke("delete_snapshot", { id: snapshot.id })
+      toast(t("snapshots.deletedToast"), "success")
+      refreshSnapshots()
+    } catch (e) {
+      toast(t("snapshots.actionFailed", { error: String(e) }), "error")
+    } finally {
+      setSnapshotBusy(null)
+    }
   }
 
   const title = (
@@ -423,6 +542,82 @@ export default function HealthPage({ active = true }: { active?: boolean } = {})
           </>
         )}
 
+        <Section title={t("snapshots.title")} icon={<History size={14} />}>
+          <div className="flex items-start justify-between gap-2 mb-2">
+            <p className="text-[11px] text-muted-foreground flex-1 min-w-0">{t("snapshots.desc")}</p>
+            <Button
+              size="sm"
+              variant="outline"
+              className="shrink-0"
+              disabled={snapshotBusy !== null}
+              onClick={() => setCreateOpen(true)}
+            >
+              {t("snapshots.create")}
+            </Button>
+          </div>
+          {snapshotsError ? (
+            <div className="flex items-center gap-2">
+              <p className="text-xs text-destructive flex-1 break-words">
+                {t("snapshots.loadFailed", { error: snapshotsError })}
+              </p>
+              <Button size="sm" variant="ghost" onClick={refreshSnapshots}>
+                {t("common.retry")}
+              </Button>
+            </div>
+          ) : snapshots === null ? (
+            <p className="text-xs text-muted-foreground">{t("snapshots.loading")}</p>
+          ) : snapshots.length === 0 ? (
+            <p className="text-xs text-muted-foreground">{t("snapshots.empty")}</p>
+          ) : (
+            <ul className="space-y-1.5">
+              {latestSnapshots(snapshots, 5).map((snapshot) => (
+                <li
+                  key={snapshot.id}
+                  className="flex flex-wrap items-center gap-2 rounded-md border border-border px-2.5 py-1.5"
+                >
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-medium truncate">{snapshot.label}</p>
+                    <p className="text-[10px] text-muted-foreground truncate">
+                      {formatSnapshotTime(snapshot.created_at)}
+                      {" · "}
+                      {t("snapshots.meta", {
+                        skills: snapshot.skill_count,
+                        files: snapshot.files.length,
+                        size: formatBytes(snapshot.size_bytes),
+                      })}
+                    </p>
+                  </div>
+                  <div className="flex gap-1 shrink-0">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-6 text-xs px-2"
+                      disabled={snapshotBusy !== null}
+                      onClick={() => setConfirmRestore(snapshot)}
+                    >
+                      {snapshotBusy === "restore" ? t("snapshots.restoring") : t("snapshots.restore")}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-6 text-xs px-2 text-destructive"
+                      disabled={snapshotBusy !== null}
+                      onClick={() => setConfirmDelete(snapshot)}
+                    >
+                      {t("snapshots.delete")}
+                    </Button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+          {snapshots && snapshots.length > 5 && (
+            <p className="text-[10px] text-muted-foreground/70 mt-2">
+              {t("snapshots.hidden", { count: snapshots.length - 5 })}
+            </p>
+          )}
+        </Section>
+
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Section title={t("health.sections.agent")} icon={<Bot size={14} />}>
             <p className="text-xs text-muted-foreground">
@@ -449,6 +644,85 @@ export default function HealthPage({ active = true }: { active?: boolean } = {})
           </p>
         )}
       </div>
+
+      <Dialog open={createOpen} onOpenChange={(next) => { if (!next) setCreateOpen(false) }}>
+        <DialogContent className="sm:max-w-[400px]">
+          <DialogHeader>
+            <DialogTitle>{t("snapshots.createTitle")}</DialogTitle>
+            <DialogDescription>{t("snapshots.createDesc")}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-1">
+            <Label htmlFor="snapshot-label">{t("snapshots.label")}</Label>
+            <Input
+              id="snapshot-label"
+              value={snapshotLabel}
+              onChange={(event) => setSnapshotLabel(event.target.value)}
+              placeholder={t("snapshots.labelPlaceholder")}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault()
+                  void createSnapshot()
+                }
+              }}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" size="sm" onClick={() => setCreateOpen(false)}>
+              {t("common.cancel")}
+            </Button>
+            <Button size="sm" disabled={snapshotBusy !== null} onClick={() => void createSnapshot()}>
+              {snapshotBusy === "create" ? t("snapshots.creating") : t("snapshots.createAction")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={confirmRestore !== null} onOpenChange={(next) => { if (!next) setConfirmRestore(null) }}>
+        <DialogContent className="sm:max-w-[400px]">
+          <DialogHeader>
+            <DialogTitle>{t("snapshots.restoreTitle")}</DialogTitle>
+            <DialogDescription>
+              {confirmRestore ? t("snapshots.restoreConfirm", { label: confirmRestore.label }) : null}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" size="sm" onClick={() => setConfirmRestore(null)}>
+              {t("common.cancel")}
+            </Button>
+            <Button
+              size="sm"
+              disabled={snapshotBusy !== null}
+              onClick={() => { if (confirmRestore) void restoreSnapshot(confirmRestore) }}
+            >
+              {snapshotBusy === "restore" ? t("snapshots.restoring") : t("snapshots.restore")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={confirmDelete !== null} onOpenChange={(next) => { if (!next) setConfirmDelete(null) }}>
+        <DialogContent className="sm:max-w-[400px]">
+          <DialogHeader>
+            <DialogTitle>{t("snapshots.deleteTitle")}</DialogTitle>
+            <DialogDescription>
+              {confirmDelete ? t("snapshots.deleteConfirm", { label: confirmDelete.label }) : null}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" size="sm" onClick={() => setConfirmDelete(null)}>
+              {t("common.cancel")}
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              disabled={snapshotBusy !== null}
+              onClick={() => { if (confirmDelete) void deleteSnapshot(confirmDelete) }}
+            >
+              {t("snapshots.delete")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

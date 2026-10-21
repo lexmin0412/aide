@@ -108,7 +108,21 @@
     "updatedToast": "已更新：{{names}}",
     "updateFailed": "更新失败：{{error}}",
     "registrySearchFailed": "注册表搜索失败：{{error}}",
-    "openSite": "打开网站"
+    "openSite": "打开网站",
+    "preview": {
+      "title": "查看更新",
+      "desc": "{{skill}} · {{from}} → {{to}}",
+      "unknownCommit": "未知",
+      "checking": "检查中...",
+      "addedTitle": "新增（{{count}}）",
+      "changedTitle": "变更（{{count}}）",
+      "removedTitle": "删除（{{count}}）",
+      "more": "还有 {{count}} 个",
+      "localModified": "本地文件与已安装版本不一致，更新会覆盖它们，并保留当前技能的备份。",
+      "noChanges": "注册表中没有文件变化。",
+      "updateNow": "立即更新",
+      "previewFailed": "获取更新预览失败：{{error}}"
+    }
   },
   "git": {
     "title": "Git 备份与共享",
@@ -480,5 +494,32 @@
       "cleared": "项目配置已清除：移除 {{removed}} 个技能链接",
       "failed": "应用项目配置失败：{{error}}"
     }
+  },
+  "snapshots": {
+    "title": "快照",
+    "desc": "保存当前的技能与 MCP 配置，之后可随时恢复。",
+    "create": "创建快照",
+    "createTitle": "创建快照",
+    "createDesc": "快照会记录当前的技能与 MCP 配置，便于在风险操作前留档。",
+    "label": "标签（可选）",
+    "labelPlaceholder": "手动",
+    "creating": "创建中...",
+    "createAction": "创建",
+    "createdToast": "快照已创建：{{label}}",
+    "empty": "还没有快照",
+    "loading": "正在加载快照...",
+    "loadFailed": "加载快照失败：{{error}}",
+    "restore": "恢复",
+    "restoring": "恢复中...",
+    "restoreTitle": "恢复快照",
+    "restoreConfirm": "恢复快照“{{label}}”？当前状态会先保存为安全快照。",
+    "restoredToast": "已恢复 {{files}} 个文件 · {{drift}} 个技能与快照有差异",
+    "delete": "删除",
+    "deleteTitle": "删除快照",
+    "deleteConfirm": "删除快照“{{label}}”？此操作不可撤销。",
+    "deletedToast": "快照已删除",
+    "actionFailed": "快照操作失败：{{error}}",
+    "meta": "{{skills}} 个技能 · {{files}} 个文件 · {{size}}",
+    "hidden": "另有 {{count}} 个更早的快照未显示"
   }
 }

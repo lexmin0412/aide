@@ -108,7 +108,21 @@
     "updatedToast": "Updated: {{names}}",
     "updateFailed": "Update failed: {{error}}",
     "registrySearchFailed": "Registry search failed: {{error}}",
-    "openSite": "Open site"
+    "openSite": "Open site",
+    "preview": {
+      "title": "Review update",
+      "desc": "{{skill}} · {{from}} → {{to}}",
+      "unknownCommit": "unknown",
+      "checking": "Checking...",
+      "addedTitle": "Added ({{count}})",
+      "changedTitle": "Changed ({{count}})",
+      "removedTitle": "Removed ({{count}})",
+      "more": "+{{count}} more",
+      "localModified": "Local files differ from the installed revision. Updating replaces them and keeps a backup of the current skill.",
+      "noChanges": "No file changes detected in the registry.",
+      "updateNow": "Update now",
+      "previewFailed": "Failed to preview the update: {{error}}"
+    }
   },
   "git": {
     "title": "Git Backup & Share",
@@ -480,5 +494,32 @@
       "cleared": "Project profile cleared: {{removed}} skill link(s) removed",
       "failed": "Failed to apply project profile: {{error}}"
     }
+  },
+  "snapshots": {
+    "title": "Snapshots",
+    "desc": "Save the current skills and MCP configuration, then restore them later.",
+    "create": "Create snapshot",
+    "createTitle": "Create snapshot",
+    "createDesc": "Snapshots capture the current skills and MCP configuration before a risky change.",
+    "label": "Label (optional)",
+    "labelPlaceholder": "manual",
+    "creating": "Creating...",
+    "createAction": "Create",
+    "createdToast": "Snapshot created: {{label}}",
+    "empty": "No snapshots yet",
+    "loading": "Loading snapshots...",
+    "loadFailed": "Failed to load snapshots: {{error}}",
+    "restore": "Restore",
+    "restoring": "Restoring...",
+    "restoreTitle": "Restore snapshot",
+    "restoreConfirm": "Restore snapshot \"{{label}}\"? The current state is saved as a safety snapshot first.",
+    "restoredToast": "Restored {{files}} file(s) · {{drift}} skill(s) changed since the snapshot",
+    "delete": "Delete",
+    "deleteTitle": "Delete snapshot",
+    "deleteConfirm": "Delete snapshot \"{{label}}\"? This cannot be undone.",
+    "deletedToast": "Snapshot deleted",
+    "actionFailed": "Snapshot action failed: {{error}}",
+    "meta": "{{skills}} skills · {{files}} files · {{size}}",
+    "hidden": "{{count}} older snapshot(s) not shown"
   }
 }

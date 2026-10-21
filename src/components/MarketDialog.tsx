@@ -4,10 +4,12 @@ import { Search, Download, Check, Store, ExternalLink } from "lucide-react"
 import {
   Dialog,
   DialogContent,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { toast } from "@/lib/toast"
 import { useTranslation } from "react-i18next"
@@ -18,7 +20,8 @@ import {
   shouldSearch,
   type SettledSearch,
 } from "@/lib/searchState"
-import type { SkillInfo } from "../types"
+import { shortCommit, summarizeUpdatePreview } from "@/lib/updatePreview"
+import type { SkillInfo, SkillUpdatePreview } from "../types"
 
 interface RegistrySkill {
   id: string
@@ -46,6 +49,23 @@ function formatInstalls(n: number): string {
   return String(n)
 }
 
+/** One grouped file list inside the update-review dialog. */
+function PreviewGroup({ title, files, tone }: { title: string; files: string[]; tone: string }) {
+  if (files.length === 0) return null
+  return (
+    <div>
+      <p className={`text-xs font-medium ${tone}`}>{title}</p>
+      <ul className="mt-1 space-y-0.5">
+        {files.slice(0, 20).map((file) => (
+          <li key={file} className="font-mono text-[10px] text-muted-foreground truncate" title={file}>
+            {file}
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
 export function MarketDialog({ open, skills, onClose, onInstalled }: MarketDialogProps) {
   const { t } = useTranslation()
   const [query, setQuery] = useState("")
@@ -56,6 +76,9 @@ export function MarketDialog({ open, skills, onClose, onInstalled }: MarketDialo
   const [installing, setInstalling] = useState<string | null>(null)
   const [updates, setUpdates] = useState<SkillUpdateInfo[]>([])
   const [updating, setUpdating] = useState<string | null>(null)
+  // Review-before-update: preview the file diff, then apply update_skill.
+  const [previewing, setPreviewing] = useState<string | null>(null)
+  const [preview, setPreview] = useState<SkillUpdatePreview | null>(null)
   // Ignore responses for stale (debounced) queries.
   const searchSeqRef = useRef(0)
   const searchInputRef = useRef<HTMLInputElement>(null)
@@ -65,6 +88,10 @@ export function MarketDialog({ open, skills, onClose, onInstalled }: MarketDialo
   if (open !== prevOpen) {
     setPrevOpen(open)
     if (open) setQuery("")
+    else {
+      setPreview(null)
+      setPreviewing(null)
+    }
   }
   const normalizedQuery = normalizeSearchQuery(query)
 
@@ -120,6 +147,24 @@ export function MarketDialog({ open, skills, onClose, onInstalled }: MarketDialo
     }
   }
 
+  const openUpdatePreview = async (skill: string) => {
+    setPreviewing(skill)
+    try {
+      setPreview(await invoke<SkillUpdatePreview>("preview_skill_update", { skill }))
+    } catch (e) {
+      toast(t("market.preview.previewFailed", { error: String(e) }), "error")
+    } finally {
+      setPreviewing(null)
+    }
+  }
+
+  const applyPreviewedUpdate = async () => {
+    const target = preview
+    if (!target) return
+    setPreview(null)
+    await updateSkill(target.skill)
+  }
+
   const install = async (id: string) => {
     setInstalling(id)
     try {
@@ -145,7 +190,8 @@ export function MarketDialog({ open, skills, onClose, onInstalled }: MarketDialo
   }
 
   return (
-    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose() }}>
+    <>
+      <Dialog open={open} onOpenChange={(o) => { if (!o) onClose() }}>
       <DialogContent className="sm:max-w-[560px] flex flex-col">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
@@ -171,10 +217,14 @@ export function MarketDialog({ open, skills, onClose, onInstalled }: MarketDialo
                   size="sm"
                   variant="outline"
                   className="h-6 text-xs px-2 shrink-0"
-                  disabled={updating === u.skill}
-                  onClick={() => void updateSkill(u.skill)}
+                  disabled={updating === u.skill || previewing === u.skill}
+                  onClick={() => void openUpdatePreview(u.skill)}
                 >
-                  {updating === u.skill ? t("market.updating") : t("market.update")}
+                  {previewing === u.skill
+                    ? t("market.preview.checking")
+                    : updating === u.skill
+                      ? t("market.updating")
+                      : t("market.update")}
                 </Button>
               </div>
             ))}
@@ -245,6 +295,63 @@ export function MarketDialog({ open, skills, onClose, onInstalled }: MarketDialo
           </a>
         </p>
       </DialogContent>
-    </Dialog>
+      </Dialog>
+
+      <Dialog open={preview !== null} onOpenChange={(o) => { if (!o) setPreview(null) }}>
+        <DialogContent className="sm:max-w-[520px]">
+          {preview && (() => {
+            const summary = summarizeUpdatePreview(preview)
+            const from = shortCommit(preview.installed_commit) ?? t("market.preview.unknownCommit")
+            const to = shortCommit(preview.latest_commit) ?? t("market.preview.unknownCommit")
+            return (
+              <>
+                <DialogHeader>
+                  <DialogTitle>{t("market.preview.title")}</DialogTitle>
+                  <DialogDescription>
+                    {t("market.preview.desc", { skill: preview.skill, from, to })}
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="max-h-[320px] space-y-3 overflow-y-auto">
+                  <div className="flex flex-wrap gap-1.5">
+                    <Badge variant="secondary">{t("market.preview.addedTitle", { count: summary.added })}</Badge>
+                    <Badge variant="secondary">{t("market.preview.changedTitle", { count: summary.changed })}</Badge>
+                    <Badge variant="secondary">{t("market.preview.removedTitle", { count: summary.removed })}</Badge>
+                  </div>
+                  {preview.local_modified && (
+                    <p className="text-[11px] text-amber-500 break-words">{t("market.preview.localModified")}</p>
+                  )}
+                  {!summary.hasChanges && (
+                    <p className="text-[11px] text-muted-foreground">{t("market.preview.noChanges")}</p>
+                  )}
+                  <PreviewGroup
+                    title={t("market.preview.addedTitle", { count: summary.added })}
+                    files={preview.added}
+                    tone="text-emerald-500"
+                  />
+                  <PreviewGroup
+                    title={t("market.preview.changedTitle", { count: summary.changed })}
+                    files={preview.changed}
+                    tone="text-amber-500"
+                  />
+                  <PreviewGroup
+                    title={t("market.preview.removedTitle", { count: summary.removed })}
+                    files={preview.removed}
+                    tone="text-destructive"
+                  />
+                </div>
+                <DialogFooter>
+                  <Button variant="ghost" size="sm" onClick={() => setPreview(null)}>
+                    {t("common.cancel")}
+                  </Button>
+                  <Button size="sm" disabled={updating !== null} onClick={() => void applyPreviewedUpdate()}>
+                    {updating !== null ? t("market.updating") : t("market.preview.updateNow")}
+                  </Button>
+                </DialogFooter>
+              </>
+            )
+          })()}
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }

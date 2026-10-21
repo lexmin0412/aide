@@ -250,3 +250,33 @@ export interface ProjectSyncResult {
   warnings: string[]
   errors: string[]
 }
+
+/** File-level diff preview shown before applying a skill update. */
+export interface SkillUpdatePreview {
+  skill: string
+  id: string
+  installed_commit?: string | null
+  latest_commit: string
+  added: string[]
+  removed: string[]
+  changed: string[]
+  local_modified: boolean
+}
+
+/** Snapshot metadata returned by the snapshot commands. */
+export interface SnapshotMeta {
+  id: string
+  /** Creation timestamp (unix seconds). */
+  created_at: number
+  label: string
+  files: string[]
+  skill_count: number
+  size_bytes: number
+}
+
+/** Outcome of restoring a snapshot. */
+export interface RestoreResult {
+  restored_files: number
+  skill_drift: number
+  safety_snapshot: SnapshotMeta
+}

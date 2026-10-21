@@ -52,6 +52,19 @@ export default function SkillGrid({ onSelectSkill }: SkillGridProps) {
     void refresh().finally(() => setLoading(false))
   }, [refresh])
 
+  // Silent background refresh used by focus/visibility and the 60s poll: no
+  // skeleton, no toast, keeps the current grid on failure. Skipped while a
+  // dialog/palette is open and while the window is hidden.
+  const refreshSilently = useCallback(() => {
+    if (document.visibilityState === "hidden") return
+    if (document.querySelector('[data-slot="dialog-content"]')) return
+    invoke<SkillInfo[]>("list_skills")
+      .then((list) => setSkills(list))
+      .catch(() => {
+        // Best-effort refresh: keep the last known grid on failure.
+      })
+  }, [])
+
   const refreshUpdates = () => {
     invoke<number[]>("check_skill_updates")
       .then((u) => setUpdateCount(u.length))
@@ -105,30 +118,28 @@ export default function SkillGrid({ onSelectSkill }: SkillGridProps) {
   // rapid focus/visibility events collapse into a single list_skills call.
   useEffect(() => {
     let timer: number | undefined
-    const refreshSilently = () => {
-      if (document.visibilityState === "hidden") return
-      // A modal dialog owns the screen; do not shuffle the grid underneath it.
-      if (document.querySelector('[data-slot="dialog-content"]')) return
+    const scheduleRefresh = () => {
       window.clearTimeout(timer)
-      timer = window.setTimeout(() => {
-        invoke<SkillInfo[]>("list_skills")
-          .then((list) => setSkills(list))
-          .catch(() => {
-            // Best-effort refresh: keep the last known grid on failure.
-          })
-      }, 500)
+      timer = window.setTimeout(refreshSilently, 500)
     }
     const onVisibilityChange = () => {
-      if (document.visibilityState === "visible") refreshSilently()
+      if (document.visibilityState === "visible") scheduleRefresh()
     }
-    window.addEventListener("focus", refreshSilently)
+    window.addEventListener("focus", scheduleRefresh)
     document.addEventListener("visibilitychange", onVisibilityChange)
     return () => {
       window.clearTimeout(timer)
-      window.removeEventListener("focus", refreshSilently)
+      window.removeEventListener("focus", scheduleRefresh)
       document.removeEventListener("visibilitychange", onVisibilityChange)
     }
-  }, [])
+  }, [refreshSilently])
+
+  // Periodic freshness: poll list_skills every 60s while the window is visible
+  // (skipped when a dialog/palette is open). No skeleton, no toast.
+  useEffect(() => {
+    const timer = window.setInterval(refreshSilently, 60_000)
+    return () => window.clearInterval(timer)
+  }, [refreshSilently])
 
 
   useEffect(() => {
