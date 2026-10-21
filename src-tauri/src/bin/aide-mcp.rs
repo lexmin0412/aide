@@ -119,29 +119,21 @@ fn call_tool(name: &str, args: &Value) -> Result<String, String> {
             let query = args["query"]
                 .as_str()
                 .ok_or("Missing required argument: query")?;
-            let matches =
-                aide_lib::search_skills_in(&skills_dir()?, query);
-            text_result(
-                serde_json::to_string_pretty(&matches).map_err(|e| e.to_string())?,
-            )
+            let matches = aide_lib::search_skills_in(&skills_dir()?, query);
+            text_result(serde_json::to_string_pretty(&matches).map_err(|e| e.to_string())?)
         }
         "search_registry" => {
             let query = args["query"]
                 .as_str()
                 .ok_or("Missing required argument: query")?;
             let skills = registry::search_registry(query, 20)?;
-            text_result(
-                serde_json::to_string_pretty(&skills).map_err(|e| e.to_string())?,
-            )
+            text_result(serde_json::to_string_pretty(&skills).map_err(|e| e.to_string())?)
         }
         "install_skill" => {
             let id = args["id"].as_str().ok_or("Missing required argument: id")?;
             let result = registry::install_from_id(id, &skills_dir()?, &aide_dir()?, false)?;
             if !result.installed.is_empty() {
-                text_result(format!(
-                    "Installed: {}",
-                    result.installed.join(", ")
-                ))
+                text_result(format!("Installed: {}", result.installed.join(", ")))
             } else if !result.skipped.is_empty() {
                 text_result(format!("Already installed: {}", result.skipped.join(", ")))
             } else {
@@ -149,30 +141,30 @@ fn call_tool(name: &str, args: &Value) -> Result<String, String> {
             }
         }
         "check_updates" => {
-            let updates = registry::check_updates(&aide_dir()?);
+            let updates = registry::check_updates(&aide_dir()?)?;
             if updates.is_empty() {
                 return text_result("All registry-installed skills are up to date".into());
             }
-            text_result(
-                serde_json::to_string_pretty(&updates).map_err(|e| e.to_string())?,
-            )
+            text_result(serde_json::to_string_pretty(&updates).map_err(|e| e.to_string())?)
         }
         "update_skill" => {
             let skill = args["skill"]
                 .as_str()
                 .ok_or("Missing required argument: skill")?;
-            let sources = registry::read_sources(&aide_dir()?);
+            let sources = registry::read_sources(&aide_dir()?)?;
             let meta = sources
                 .get(skill)
                 .ok_or_else(|| format!("No install source recorded for \"{skill}\""))?
                 .clone();
-            let result =
-                registry::install_from_id(&meta.id, &skills_dir()?, &aide_dir()?, true)?;
+            let result = registry::install_from_id(&meta.id, &skills_dir()?, &aide_dir()?, true)?;
             text_result(format!("Updated: {}", result.installed.join(", ")))
         }
         "sync_all_tools" => {
             let results = aide_lib::sync_all_skills_to_tools();
-            let linked = results.iter().filter(|r| r.success && r.error.is_none()).count();
+            let linked = results
+                .iter()
+                .filter(|r| r.success && r.error.is_none())
+                .count();
             text_result(format!(
                 "Synced {} tool(s) ({} linked ok)",
                 results.len(),
@@ -181,7 +173,7 @@ fn call_tool(name: &str, args: &Value) -> Result<String, String> {
         }
         "publish_scope" | "pull_scope" => {
             let aide = aide_dir()?;
-            let config = git_sync::read_config(&aide);
+            let config = git_sync::read_config(&aide)?;
             let scope = match args["scope"].as_str() {
                 Some(s) => s.to_string(),
                 None => git_sync::default_scope_name(&config)
@@ -255,10 +247,7 @@ fn run_mcp_server() -> Result<(), String> {
                     })),
                 }
             }
-            other => Err((
-                -32601,
-                format!("Method not found: {other}"),
-            )),
+            other => Err((-32601, format!("Method not found: {other}"))),
         };
 
         let payload = match response {
@@ -322,9 +311,7 @@ fn cli_main(args: &[String]) -> Result<String, String> {
                 .join("\n"))
         }
         Some("search") => {
-            let query = args
-                .get(1)
-                .ok_or("Usage: aide-mcp search <query>")?;
+            let query = args.get(1).ok_or("Usage: aide-mcp search <query>")?;
             let matches = aide_lib::search_skills_in(&skills_dir()?, query);
             if matches.is_empty() {
                 return Ok("No matches".into());
@@ -342,7 +329,12 @@ fn cli_main(args: &[String]) -> Result<String, String> {
             let skills = registry::search_registry(query, 20)?;
             Ok(skills
                 .iter()
-                .map(|s| format!("{}  ({} installs)  https://skills.sh/{}", s.id, s.installs, s.id))
+                .map(|s| {
+                    format!(
+                        "{}  ({} installs)  https://skills.sh/{}",
+                        s.id, s.installs, s.id
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join("\n"))
         }
@@ -358,20 +350,27 @@ fn cli_main(args: &[String]) -> Result<String, String> {
             }
         }
         Some("updates") => {
-            let updates = registry::check_updates(&aide_dir()?);
+            let updates = registry::check_updates(&aide_dir()?)?;
             if updates.is_empty() {
                 Ok("All registry-installed skills are up to date".into())
             } else {
                 Ok(updates
                     .iter()
-                    .map(|u| format!("{}  ({} -> {})", u.skill, &u.installed_commit[..7.min(u.installed_commit.len())], &u.latest_commit[..7.min(u.latest_commit.len())]))
+                    .map(|u| {
+                        format!(
+                            "{}  ({} -> {})",
+                            u.skill,
+                            &u.installed_commit[..7.min(u.installed_commit.len())],
+                            &u.latest_commit[..7.min(u.latest_commit.len())]
+                        )
+                    })
                     .collect::<Vec<_>>()
                     .join("\n"))
             }
         }
         Some("update") => {
             let skill = args.get(1).ok_or("Usage: aide-mcp update <skill>")?;
-            let sources = registry::read_sources(&aide_dir()?);
+            let sources = registry::read_sources(&aide_dir()?)?;
             let meta = sources
                 .get(skill)
                 .ok_or_else(|| format!("No install source recorded for \"{skill}\""))?
@@ -383,14 +382,24 @@ fn cli_main(args: &[String]) -> Result<String, String> {
             let results = aide_lib::sync_all_skills_to_tools();
             Ok(results
                 .iter()
-                .map(|r| format!("{}: {}", r.name, if r.success { "ok" } else { r.error.as_deref().unwrap_or("failed") }))
+                .map(|r| {
+                    format!(
+                        "{}: {}",
+                        r.name,
+                        if r.success {
+                            "ok"
+                        } else {
+                            r.error.as_deref().unwrap_or("failed")
+                        }
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join("\n"))
         }
         Some("publish") | Some("pull") => {
             let mode = args[0].clone();
             let aide = aide_dir()?;
-            let config = git_sync::read_config(&aide);
+            let config = git_sync::read_config(&aide)?;
             let scope = match args.get(1) {
                 Some(s) => s.clone(),
                 None => git_sync::default_scope_name(&config)
@@ -412,10 +421,7 @@ fn cli_main(args: &[String]) -> Result<String, String> {
                 ))
             }
         }
-        Some(other) => Err(format!(
-            "Unknown command \"{other}\".\n\n{}",
-            usage()
-        )),
+        Some(other) => Err(format!("Unknown command \"{other}\".\n\n{}", usage())),
     }
 }
 

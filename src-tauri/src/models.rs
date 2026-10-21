@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::mcp::strip_jsonc_comments;
+use crate::storage;
 
 const MODELS_DEV_API: &str = "https://models.dev/api.json";
 const CACHE_TTL: u64 = 24 * 60 * 60;
@@ -50,25 +51,66 @@ pub fn profiles_path(aide_dir: &Path) -> PathBuf {
     aide_dir.join("models.json")
 }
 
-pub fn read_profiles(aide_dir: &Path) -> ModelProfilesConfig {
-    fs::read_to_string(profiles_path(aide_dir))
-        .ok()
-        .and_then(|content| serde_json::from_str(&content).ok())
-        .unwrap_or_default()
+/// Read the profile store. A missing file yields the empty config; a corrupt
+/// one is an error so callers never replace it with defaults.
+pub fn read_profiles(aide_dir: &Path) -> Result<ModelProfilesConfig, String> {
+    Ok(storage::read_json(&profiles_path(aide_dir))?.unwrap_or_default())
 }
 
 pub fn write_profiles(aide_dir: &Path, config: &ModelProfilesConfig) -> Result<(), String> {
     validate_profiles(config)?;
-    fs::create_dir_all(aide_dir).map_err(|e| e.to_string())?;
-    let json = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
     let path = profiles_path(aide_dir);
-    fs::write(&path, json).map_err(|e| e.to_string())?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).map_err(|e| e.to_string())?;
+    let backups = aide_dir.join("backups");
+    storage::write_json(&path, config, Some(&backups))?;
+    // The file holds API keys.
+    storage::restrict_permissions(&path)
+}
+
+// ── Tool config file helpers ──
+
+/// Parse a JSON/JSONC tool config. A missing or empty file is an empty object;
+/// a corrupt file is an error so a sync can never replace it with defaults.
+fn read_jsonc_object(path: &Path) -> Result<Value, String> {
+    let empty = || Value::Object(Default::default());
+    if !path.exists() {
+        return Ok(empty());
     }
-    Ok(())
+    let raw = fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    if raw.trim().is_empty() {
+        return Ok(empty());
+    }
+    serde_json::from_str(&strip_jsonc_comments(&raw)).map_err(|e| {
+        format!(
+            "Cannot parse {}: {e}. Fix or move the file before syncing; it was left untouched.",
+            path.display()
+        )
+    })
+}
+
+fn read_toml_table(path: &Path) -> Result<toml::Table, String> {
+    if !path.exists() {
+        return Ok(toml::Table::new());
+    }
+    let raw = fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    if raw.trim().is_empty() {
+        return Ok(toml::Table::new());
+    }
+    raw.parse().map_err(|e| {
+        format!(
+            "Cannot parse {}: {e}. Fix or move the file before syncing; it was left untouched.",
+            path.display()
+        )
+    })
+}
+
+/// Write a tool config atomically, keeping a backup of the previous revision
+/// under ~/.aide/backups.
+fn write_tool_config(path: &Path, home: &Path, content: &str) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
+    }
+    let backups = home.join(".aide").join("backups");
+    storage::write_bytes(path, content.as_bytes(), Some(&backups))
 }
 
 fn validate_profiles(config: &ModelProfilesConfig) -> Result<(), String> {
@@ -140,7 +182,10 @@ pub fn fetch_models_dev(aide_dir: &Path, force: bool) -> Result<Vec<ProviderSumm
     let cache = cache_path(aide_dir);
     if !force {
         if let Ok(meta) = fs::metadata(&cache) {
-            if let Ok(age) = meta.modified().map(|m| m.elapsed().map(|d| d.as_secs()).unwrap_or(0)) {
+            if let Ok(age) = meta
+                .modified()
+                .map(|m| m.elapsed().map(|d| d.as_secs()).unwrap_or(0))
+            {
                 if age < CACHE_TTL {
                     if let Ok(raw) = fs::read_to_string(&cache) {
                         if let Ok(providers) = serde_json::from_str(&raw) {
@@ -191,7 +236,7 @@ fn parse_models_dev(body: &str) -> Result<Vec<ProviderSummary>, String> {
                 });
             }
         }
-        models.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        models.sort_by_key(|m| m.name.to_lowercase());
         let base_url = ["base_url", "baseURL", "api"]
             .iter()
             .find_map(|k| value[*k].as_str())
@@ -205,7 +250,7 @@ fn parse_models_dev(body: &str) -> Result<Vec<ProviderSummary>, String> {
             models,
         });
     }
-    out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    out.sort_by_key(|p| p.name.to_lowercase());
     Ok(out)
 }
 
@@ -232,18 +277,13 @@ fn sync_claude_code(profile: &ModelProfile, home: &Path) -> Result<ModelSyncResu
         return Ok(ModelSyncResult {
             tool,
             ok: false,
-            message: "Skipped: Claude Code needs the anthropic provider or a base URL (protocol proxy)".into(),
+            message:
+                "Skipped: Claude Code needs the anthropic provider or a base URL (protocol proxy)"
+                    .into(),
         });
     }
     let path = home.join(".claude").join("settings.json");
-    let mut root: Value = if path.exists() {
-        serde_json::from_str(&strip_jsonc_comments(
-            &fs::read_to_string(&path).map_err(|e| e.to_string())?,
-        ))
-        .unwrap_or(Value::Object(Default::default()))
-    } else {
-        Value::Object(Default::default())
-    };
+    let mut root = read_jsonc_object(&path)?;
     if !root.is_object() {
         root = Value::Object(Default::default());
     }
@@ -270,19 +310,17 @@ fn sync_claude_code(profile: &ModelProfile, home: &Path) -> Result<ModelSyncResu
     if !profile.model.trim().is_empty() {
         set_env(env, "ANTHROPIC_MODEL", json!(profile.model.trim()));
     }
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
     let content = serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?;
-    fs::write(&path, content).map_err(|e| e.to_string())?;
+    write_tool_config(&path, home, &content)?;
     let mut message = "Updated ~/.claude/settings.json env".to_string();
     if !replaced.is_empty() {
-        message.push_str(&format!(
-            " (replaced existing {})",
-            replaced.join(", ")
-        ));
+        message.push_str(&format!(" (replaced existing {})", replaced.join(", ")));
     }
-    Ok(ModelSyncResult { tool, ok: true, message })
+    Ok(ModelSyncResult {
+        tool,
+        ok: true,
+        message,
+    })
 }
 
 /// OpenCode supports arbitrary providers in opencode.json via the ai-sdk.
@@ -292,15 +330,10 @@ fn sync_opencode(
     home: &Path,
 ) -> Result<ModelSyncResult, String> {
     let tool = "opencode".to_string();
-    let path = home.join(".config/opencode/opencode.json");
-    let mut root: Value = if path.exists() {
-        serde_json::from_str(&strip_jsonc_comments(
-            &fs::read_to_string(&path).map_err(|e| e.to_string())?,
-        ))
-        .unwrap_or(Value::Object(Default::default()))
-    } else {
-        Value::Object(Default::default())
-    };
+    // Shared resolver: MCP sync writes the same file (jsonc when present, or
+    // the json fallback / jsonc for a fresh install).
+    let path = crate::mcp::opencode_config_path(home);
+    let mut root = read_jsonc_object(&path)?;
     if !root.is_object() {
         root = Value::Object(Default::default());
     }
@@ -340,17 +373,15 @@ fn sync_opencode(
     entry["models"] = Value::Object(models);
     providers.as_object_mut().unwrap().insert(key, entry);
 
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
     let content = serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?;
-    fs::write(&path, content).map_err(|e| e.to_string())?;
+    write_tool_config(&path, home, &content)?;
     Ok(ModelSyncResult {
         tool,
         ok: true,
         message: format!(
-            "Provider \"aide-{}\" written to opencode.json ({} model(s))",
+            "Provider \"aide-{}\" written to {} ({} model(s))",
             profile.id,
+            path.display(),
             profile.models.len()
         ),
     })
@@ -361,14 +392,7 @@ fn sync_opencode(
 fn sync_codex(profile: &ModelProfile, home: &Path) -> Result<ModelSyncResult, String> {
     let tool = "codex".to_string();
     let path = home.join(".codex").join("config.toml");
-    let mut table: toml::Table = if path.exists() {
-        fs::read_to_string(&path)
-            .map_err(|e| e.to_string())?
-            .parse()
-            .unwrap_or_default()
-    } else {
-        Default::default()
-    };
+    let mut table = read_toml_table(&path)?;
     let provider_key = profile_provider_name(profile);
     let env_key = format!(
         "AIDE_{}_API_KEY",
@@ -397,13 +421,13 @@ fn sync_codex(profile: &ModelProfile, home: &Path) -> Result<ModelSyncResult, St
         .unwrap()
         .insert(provider_key, toml::Value::Table(provider));
     if !profile.model.trim().is_empty() {
-        table.insert("model".into(), toml::Value::String(profile.model.trim().to_string()));
-    }
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        table.insert(
+            "model".into(),
+            toml::Value::String(profile.model.trim().to_string()),
+        );
     }
     let content = toml::to_string_pretty(&toml::Value::Table(table)).map_err(|e| e.to_string())?;
-    fs::write(&path, content).map_err(|e| e.to_string())?;
+    write_tool_config(&path, home, &content)?;
     Ok(ModelSyncResult {
         tool,
         ok: true,
@@ -413,9 +437,6 @@ fn sync_codex(profile: &ModelProfile, home: &Path) -> Result<ModelSyncResult, St
         ),
     })
 }
-
-/// Tools without file-based model configuration cannot be synced.
-const SYNCABLE_TOOLS: [&str; 3] = ["claude_code", "opencode", "codex"];
 
 pub fn sync_profile(
     profile: &ModelProfile,
@@ -501,7 +522,7 @@ mod tests {
             profiles: vec![sample_profile()],
         };
         write_profiles(&base, &config).unwrap();
-        let read = read_profiles(&base);
+        let read = read_profiles(&base).unwrap();
         assert_eq!(read.profiles.len(), 1);
         assert_eq!(read.profiles[0].provider, "anthropic");
 
@@ -515,9 +536,71 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let mode = fs::metadata(profiles_path(&base)).unwrap().permissions().mode();
+            let mode = fs::metadata(profiles_path(&base))
+                .unwrap()
+                .permissions()
+                .mode();
             assert_eq!(mode & 0o777, 0o600);
         }
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn read_profiles_distinguishes_missing_from_corrupt() {
+        let base = temp_base("corrupt");
+        assert!(read_profiles(&base).unwrap().profiles.is_empty());
+        fs::write(profiles_path(&base), "{\"profiles\": [").unwrap();
+        assert!(read_profiles(&base).is_err());
+        // A corrupt file is never silently replaced by a write from the UI.
+        let err = read_profiles(&base).unwrap_err();
+        assert!(err.contains("parse"), "unexpected error: {err}");
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn write_profiles_backs_up_previous_revision() {
+        let base = temp_base("backup");
+        let config = ModelProfilesConfig {
+            profiles: vec![sample_profile()],
+        };
+        write_profiles(&base, &config).unwrap();
+        let mut updated = config.clone();
+        updated.profiles[0].name = "Renamed".into();
+        write_profiles(&base, &updated).unwrap();
+        let backups = base.join("backups");
+        assert_eq!(fs::read_dir(&backups).unwrap().count(), 1);
+        assert_eq!(read_profiles(&base).unwrap().profiles[0].name, "Renamed");
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn sync_claude_code_aborts_on_corrupt_settings_file() {
+        let base = temp_base("claude-corrupt");
+        let home = base.join("home");
+        fs::create_dir_all(home.join(".claude")).unwrap();
+        let path = home.join(".claude/settings.json");
+        let original = r#"{"env": {"EDITOR": "vim""#;
+        fs::write(&path, original).unwrap();
+        let profile = sample_profile();
+        let err = sync_claude_code(&profile, &home).unwrap_err();
+        assert!(err.contains("Cannot parse"), "unexpected error: {err}");
+        // Nothing is overwritten; the user can still repair the file.
+        assert_eq!(fs::read_to_string(&path).unwrap(), original);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn sync_codex_aborts_on_corrupt_toml_file() {
+        let base = temp_base("codex-corrupt");
+        let home = base.join("home");
+        fs::create_dir_all(home.join(".codex")).unwrap();
+        let path = home.join(".codex/config.toml");
+        let original = "[broken\nkey = ";
+        fs::write(&path, original).unwrap();
+        let profile = sample_profile();
+        let err = sync_codex(&profile, &home).unwrap_err();
+        assert!(err.contains("Cannot parse"), "unexpected error: {err}");
+        assert_eq!(fs::read_to_string(&path).unwrap(), original);
         let _ = fs::remove_dir_all(&base);
     }
 
@@ -559,7 +642,10 @@ mod tests {
                 .unwrap();
         assert_eq!(settings["env"]["EDITOR"], "vim");
         assert_eq!(settings["env"]["ANTHROPIC_AUTH_TOKEN"], "sk-ant-test123");
-        assert_eq!(settings["env"]["ANTHROPIC_BASE_URL"], "https://proxy.example.com");
+        assert_eq!(
+            settings["env"]["ANTHROPIC_BASE_URL"],
+            "https://proxy.example.com"
+        );
         assert_eq!(settings["env"]["ANTHROPIC_MODEL"], "claude-sonnet-4-6");
         assert_eq!(settings["model"], "opus");
         let _ = fs::remove_dir_all(&base);
@@ -592,9 +678,10 @@ mod tests {
         let profile = sample_profile();
         let result = sync_opencode(&profile, None, &home).unwrap();
         assert!(result.ok);
-        let parsed: Value =
-            serde_json::from_str(&fs::read_to_string(home.join(".config/opencode/opencode.json")).unwrap())
-                .unwrap();
+        let parsed: Value = serde_json::from_str(
+            &fs::read_to_string(home.join(".config/opencode/opencode.json")).unwrap(),
+        )
+        .unwrap();
         assert_eq!(parsed["theme"], "dark");
         assert_eq!(parsed["provider"]["existing"]["options"]["apiKey"], "keep");
         let key = format!("aide-{}", profile.id);
@@ -603,6 +690,43 @@ mod tests {
             "sk-ant-test123"
         );
         assert!(parsed["provider"][&key]["models"]["claude-sonnet-4-6"].is_object());
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn sync_opencode_creates_jsonc_for_a_fresh_install() {
+        let base = temp_base("opencode-fresh");
+        let home = base.join("home");
+        fs::create_dir_all(&home).unwrap();
+
+        let profile = sample_profile();
+        let result = sync_opencode(&profile, None, &home).unwrap();
+        assert!(result.ok);
+
+        let jsonc = home.join(".config/opencode/opencode.jsonc");
+        assert!(jsonc.is_file(), "fresh install must create opencode.jsonc");
+        assert!(!home.join(".config/opencode/opencode.json").exists());
+        let parsed: Value = serde_json::from_str(&fs::read_to_string(&jsonc).unwrap()).unwrap();
+        let key = format!("aide-{}", profile.id);
+        assert_eq!(
+            parsed["provider"][&key]["options"]["apiKey"],
+            "sk-ant-test123"
+        );
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn sync_opencode_keeps_using_an_existing_json_file() {
+        let base = temp_base("opencode-existing-json");
+        let home = base.join("home");
+        let dir = home.join(".config/opencode");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("opencode.json"), "{}").unwrap();
+
+        let profile = sample_profile();
+        sync_opencode(&profile, None, &home).unwrap();
+        assert!(dir.join("opencode.json").is_file());
+        assert!(!dir.join("opencode.jsonc").exists());
         let _ = fs::remove_dir_all(&base);
     }
 
@@ -627,7 +751,10 @@ mod tests {
             parsed["model_providers"][&key]["base_url"].as_str(),
             Some("https://api.example.com/v1")
         );
-        assert!(parsed["model_providers"][&key]["env_key"].as_str().unwrap().starts_with("AIDE_"));
+        assert!(parsed["model_providers"][&key]["env_key"]
+            .as_str()
+            .unwrap()
+            .starts_with("AIDE_"));
         let _ = fs::remove_dir_all(&base);
     }
 
@@ -638,13 +765,17 @@ mod tests {
         fs::create_dir_all(&home).unwrap();
         let mut profile = sample_profile();
         profile.targets = vec!["claude_code".into(), "cursor".into()];
-        let config = ModelProfilesConfig { profiles: vec![profile] };
+        let config = ModelProfilesConfig {
+            profiles: vec![profile],
+        };
         let results = sync_all_profiles(&config, &[], &home);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].results.len(), 2);
         assert!(results[0].results[0].ok);
         assert!(!results[0].results[1].ok);
-        assert!(results[0].results[1].message.contains("no file-based model configuration"));
+        assert!(results[0].results[1]
+            .message
+            .contains("no file-based model configuration"));
         let _ = fs::remove_dir_all(&base);
     }
 }

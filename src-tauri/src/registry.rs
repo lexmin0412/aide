@@ -10,11 +10,16 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+use crate::storage;
+
 const SEARCH_ENDPOINT: &str = "https://skills.sh/api/search";
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(60);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_DOWNLOAD_BYTES: u64 = 25 * 1024 * 1024;
 const MAX_EXTRACTED_FILES: usize = 2000;
+/// Upper bounds on what an (untrusted) archive may expand to on disk.
+const MAX_EXTRACTED_TOTAL_BYTES: u64 = 150 * 1024 * 1024;
+const MAX_EXTRACTED_FILE_BYTES: u64 = 20 * 1024 * 1024;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RegistrySkill {
@@ -55,6 +60,101 @@ pub struct SkillUpdate {
     pub latest_commit: String,
 }
 
+/// How long a GitHub HEAD lookup stays valid on disk. `check_updates` runs on
+/// page open and fans out one API call per repository/subtree; caching the
+/// HEADs prevents a rate-limit hit when the user re-opens the page.
+const UPDATE_CACHE_TTL: u64 = 10 * 60;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct HeadCacheEntry {
+    commit: String,
+    fetched_at: u64,
+}
+
+fn head_cache_path(aide_dir: &Path) -> PathBuf {
+    aide_dir.join("cache").join("github-heads.json")
+}
+
+/// Best-effort cache read: this file is derived data, so a corrupt cache is
+/// discarded instead of blocking the update check.
+fn read_head_cache(aide_dir: &Path) -> HashMap<String, HeadCacheEntry> {
+    fs::read_to_string(head_cache_path(aide_dir))
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+fn write_head_cache(
+    aide_dir: &Path,
+    cache: &HashMap<String, HeadCacheEntry>,
+) -> Result<(), String> {
+    storage::write_json(&head_cache_path(aide_dir), cache, None)
+}
+
+/// Identity of a GitHub HEAD lookup: a repository, optionally limited to a
+/// subtree. Several installed skills can share one entry.
+fn head_cache_key(owner: &str, repo: &str, subtree: Option<&str>) -> String {
+    match subtree {
+        Some(subtree) => format!("{owner}/{repo}/{subtree}"),
+        None => format!("{owner}/{repo}"),
+    }
+}
+
+/// Return a cached HEAD commit when it is younger than `UPDATE_CACHE_TTL`,
+/// otherwise call `fetch`. The bool reports whether the cache was modified.
+fn cached_or_fetch_head(
+    key: &str,
+    cache: &mut HashMap<String, HeadCacheEntry>,
+    now: u64,
+    fetch: impl FnOnce() -> Result<String, String>,
+) -> Result<(String, bool), String> {
+    if let Some(entry) = cache.get(key) {
+        if now.saturating_sub(entry.fetched_at) < UPDATE_CACHE_TTL {
+            return Ok((entry.commit.clone(), false));
+        }
+    }
+    let commit = fetch()?;
+    cache.insert(
+        key.to_string(),
+        HeadCacheEntry {
+            commit: commit.clone(),
+            fetched_at: now,
+        },
+    );
+    Ok((commit, true))
+}
+
+/// Deduplicated HEAD lookups required by the recorded install sources:
+/// (cache key, owner, repo, subtree). Several skills of one repository share a
+/// single lookup.
+fn update_targets(
+    sources: &HashMap<String, SkillSource>,
+) -> Vec<(String, String, String, Option<String>)> {
+    let mut targets: Vec<(String, String, String, Option<String>)> = sources
+        .values()
+        .filter(|meta| meta.commit.is_some())
+        .filter_map(|meta| {
+            let parts: Vec<&str> = meta.id.split('/').collect();
+            if parts.len() < 2 {
+                return None;
+            }
+            let subtree = (parts.len() > 2).then(|| parts[2].to_string());
+            let key = head_cache_key(parts[0], parts[1], subtree.as_deref());
+            Some((key, parts[0].to_string(), parts[1].to_string(), subtree))
+        })
+        .collect();
+    targets.sort();
+    targets.dedup();
+    targets
+}
+
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 /// Latest commit touching `path` (or the repo root when None) via the
 /// unauthenticated GitHub API.
 fn latest_commit(owner: &str, repo: &str, path: Option<&str>) -> Result<String, String> {
@@ -68,8 +168,7 @@ fn latest_commit(owner: &str, repo: &str, path: Option<&str>) -> Result<String, 
         .map_err(|e| format!("GitHub API failed: {e}"))?
         .into_string()
         .map_err(|e| e.to_string())?;
-    let parsed: serde_json::Value =
-        serde_json::from_str(&body).map_err(|e| e.to_string())?;
+    let parsed: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
     parsed[0]["sha"]
         .as_str()
         .map(|s| s.to_string())
@@ -154,44 +253,65 @@ pub fn sources_path(aide_dir: &Path) -> PathBuf {
     aide_dir.join("skill-sources.json")
 }
 
-pub fn read_sources(aide_dir: &Path) -> HashMap<String, SkillSource> {
-    let path = sources_path(aide_dir);
-    fs::read_to_string(path)
-        .ok()
-        .and_then(|content| serde_json::from_str(&content).ok())
-        .unwrap_or_default()
+/// Read install provenance. A missing file is empty; a corrupt one is an error
+/// so it is never replaced with an empty map.
+pub fn read_sources(aide_dir: &Path) -> Result<HashMap<String, SkillSource>, String> {
+    Ok(storage::read_json(&sources_path(aide_dir))?.unwrap_or_default())
 }
 
 /// Compare each registry-installed skill's recorded commit with the remote
 /// HEAD for its subtree. Entries without a recorded commit (local imports,
 /// failed lookups) are skipped.
-pub fn check_updates(aide_dir: &Path) -> Vec<SkillUpdate> {
-    let sources = read_sources(aide_dir);
+pub fn check_updates(aide_dir: &Path) -> Result<Vec<SkillUpdate>, String> {
+    let sources = read_sources(aide_dir)?;
+    let now = now_secs();
+    let mut cache = read_head_cache(aide_dir);
+    let mut cache_changed = false;
+    let mut latest_by_key: HashMap<String, String> = HashMap::new();
+
+    for (key, owner, repo, subtree) in update_targets(&sources) {
+        let result = cached_or_fetch_head(&key, &mut cache, now, || {
+            latest_commit(&owner, &repo, subtree.as_deref())
+        });
+        if let Ok((commit, changed)) = result {
+            cache_changed |= changed;
+            latest_by_key.insert(key, commit);
+        }
+        // Network/API failures are skipped per repository, as before: a flaky
+        // lookup for one repo must not hide updates for the others.
+    }
+    if cache_changed {
+        // Cache writes are best effort; a failure only costs the next lookup.
+        let _ = write_head_cache(aide_dir, &cache);
+    }
+
+    let mut entries: Vec<(&String, &SkillSource)> = sources.iter().collect();
+    entries.sort_by(|a, b| a.0.cmp(b.0));
     let mut updates = Vec::new();
-    for (skill, meta) in sources {
-        let installed_commit = match &meta.commit {
-            Some(c) => c.clone(),
-            None => continue,
+    for (skill, meta) in entries {
+        let Some(installed_commit) = meta.commit.clone() else {
+            continue;
         };
         let parts: Vec<&str> = meta.id.split('/').collect();
         if parts.len() < 2 {
             continue;
         }
-        let subtree = if parts.len() > 2 { Some(parts[2]) } else { None };
-        let Ok(latest) = latest_commit(parts[0], parts[1], subtree) else {
+        let subtree = (parts.len() > 2).then(|| parts[2]);
+        let key = head_cache_key(parts[0], parts[1], subtree);
+        let Some(latest) = latest_by_key.get(&key) else {
             continue;
         };
-        if latest != installed_commit {
+        if *latest != installed_commit {
             updates.push(SkillUpdate {
-                skill,
+                skill: skill.clone(),
                 id: meta.id.clone(),
                 source: meta.source.clone(),
                 installed_commit,
-                latest_commit: latest,
+                latest_commit: latest.clone(),
             });
         }
     }
-    updates
+    Ok(updates)
 }
 
 pub fn record_source(
@@ -201,7 +321,7 @@ pub fn record_source(
     source: &str,
     commit: Option<String>,
 ) -> Result<(), String> {
-    let mut map = read_sources(aide_dir);
+    let mut map = read_sources(aide_dir)?;
     map.insert(
         skill.to_string(),
         SkillSource {
@@ -214,13 +334,19 @@ pub fn record_source(
             commit,
         },
     );
-    fs::create_dir_all(aide_dir).map_err(|e| e.to_string())?;
-    let json = serde_json::to_string_pretty(&map).map_err(|e| e.to_string())?;
-    fs::write(sources_path(aide_dir), json).map_err(|e| e.to_string())
+    let backups = aide_dir.join("backups");
+    storage::write_json(&sources_path(aide_dir), &map, Some(&backups))
 }
 
-fn download_repo_tarball(owner: &str, repo: &str, dest: &Path) -> Result<(), String> {
-    let url = format!("https://codeload.github.com/{owner}/{repo}/tar.gz/HEAD");
+fn download_repo_tarball(
+    owner: &str,
+    repo: &str,
+    reference: &str,
+    dest: &Path,
+) -> Result<(), String> {
+    // Download the exact commit that was resolved before the download: asking
+    // for HEAD twice could persist a commit id that no longer matches the code.
+    let url = format!("https://codeload.github.com/{owner}/{repo}/tar.gz/{reference}");
     let mut reader = ureq::get(&url)
         .timeout(DOWNLOAD_TIMEOUT)
         .call()
@@ -243,12 +369,29 @@ fn download_repo_tarball(owner: &str, repo: &str, dest: &Path) -> Result<(), Str
     Ok(())
 }
 
+/// Guard against decompression bombs: a small archive must not be able to fill
+/// the disk. Returns the running total of extracted file bytes.
+fn check_extraction_limits(size: u64, running_total: u64) -> Result<u64, String> {
+    if size > MAX_EXTRACTED_FILE_BYTES {
+        return Err("Archive contains a file larger than the 20 MB limit".to_string());
+    }
+    let total = running_total.saturating_add(size);
+    if total > MAX_EXTRACTED_TOTAL_BYTES {
+        return Err("Archive expands beyond the 150 MB limit".to_string());
+    }
+    Ok(total)
+}
+
 fn extract_tarball(archive: &Path, dest: &Path) -> Result<(), String> {
     let file = fs::File::open(archive).map_err(|e| e.to_string())?;
     let gz = flate2::read::GzDecoder::new(file);
     let mut archive = tar::Archive::new(gz);
     let mut count = 0usize;
-    for entry in archive.entries().map_err(|e| format!("Invalid archive: {e}"))? {
+    let mut total_bytes: u64 = 0;
+    for entry in archive
+        .entries()
+        .map_err(|e| format!("Invalid archive: {e}"))?
+    {
         let mut entry = entry.map_err(|e| e.to_string())?;
         let entry_type = entry.header().entry_type();
         if !(entry_type.is_file() || entry_type.is_dir()) {
@@ -259,9 +402,17 @@ fn extract_tarball(archive: &Path, dest: &Path) -> Result<(), String> {
         if count > MAX_EXTRACTED_FILES {
             return Err("Archive contains too many files".to_string());
         }
-        entry
+        if entry_type.is_file() {
+            let size = entry.header().size().map_err(|e| e.to_string())?;
+            total_bytes = check_extraction_limits(size, total_bytes)?;
+        }
+        // unpack_in returns false when the entry would escape `dest`.
+        let unpacked = entry
             .unpack_in(dest)
             .map_err(|e| format!("Unsafe archive entry: {e}"))?;
+        if !unpacked {
+            return Err("Archive contains an entry outside the extraction directory".to_string());
+        }
     }
     Ok(())
 }
@@ -281,8 +432,50 @@ pub struct RemoteInstallResult {
     pub skipped: Vec<String>,
 }
 
+/// A folder name is only accepted when it stays inside the skills directory.
+fn valid_folder_name(name: &str) -> Option<String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() || trimmed == "." || trimmed == ".." {
+        return None;
+    }
+    if trimmed
+        .chars()
+        .any(|c| c == '/' || c == '\\' || c.is_control())
+    {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+/// Name of the folder the skill is installed into: the frontmatter `name` when
+/// present, else the skill segment of the id, else the repository name. The
+/// GitHub archive root name (e.g. "repo-main") is never used.
+pub fn skill_dest_name(src: &Path, only_skill: Option<&str>, repo: &str) -> Result<String, String> {
+    if let Some(name) = crate::skill_frontmatter_name(src).and_then(|n| valid_folder_name(&n)) {
+        return Ok(name);
+    }
+    if let Some(skill) = only_skill.and_then(valid_folder_name) {
+        return Ok(skill);
+    }
+    valid_folder_name(repo)
+        .ok_or_else(|| format!("Cannot derive a skill folder name for \"{repo}\""))
+}
+
+/// Does this archive directory correspond to the skill requested by id?
+fn dir_matches_skill(dir: &Path, wanted: &str) -> bool {
+    let dir_name = dir
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    if dir_name == wanted {
+        return true;
+    }
+    crate::skill_frontmatter_name(dir).as_deref() == Some(wanted)
+}
+
 /// Install one or more skills from a GitHub repository into `skills_dir`,
-/// recording provenance under `aide_dir`. Existing skills are skipped.
+/// recording provenance under `aide_dir`. Existing skills are skipped unless
+/// `force`, in which case the replaced copy is moved to the trash first.
 pub fn install_from_id(
     id: &str,
     skills_dir: &Path,
@@ -302,8 +495,16 @@ pub fn install_from_id(
     fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
 
     let result = (|| {
+        // Resolve the commit before downloading so the recorded provenance is
+        // exactly the tree that gets installed even if HEAD moves meanwhile.
+        let head_commit = latest_commit(&owner, &repo, only_skill.as_deref()).ok();
         let archive = tmp.join("repo.tar.gz");
-        download_repo_tarball(&owner, &repo, &archive)?;
+        download_repo_tarball(
+            &owner,
+            &repo,
+            head_commit.as_deref().unwrap_or("HEAD"),
+            &archive,
+        )?;
         let extract_dir = tmp.join("extract");
         fs::create_dir_all(&extract_dir).map_err(|e| e.to_string())?;
         extract_tarball(&archive, &extract_dir)?;
@@ -311,11 +512,7 @@ pub fn install_from_id(
 
         let mut candidates = discover_skill_dirs(&root);
         if let Some(name) = &only_skill {
-            candidates.retain(|p| {
-                p.file_name()
-                    .map(|n| n.to_string_lossy() == *name)
-                    .unwrap_or(false)
-            });
+            candidates.retain(|p| dir_matches_skill(p, name));
             if candidates.is_empty() {
                 return Err(format!("Skill \"{name}\" not found in {owner}/{repo}"));
             }
@@ -323,12 +520,8 @@ pub fn install_from_id(
 
         let mut installed = Vec::new();
         let mut skipped = Vec::new();
-        let head_commit = latest_commit(&owner, &repo, only_skill.as_deref()).ok();
         for src in candidates {
-            let name = src
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .ok_or("Invalid skill folder name")?;
+            let name = skill_dest_name(&src, only_skill.as_deref(), &repo)?;
             let dest = skills_dir.join(&name);
             if dest.exists() && !force {
                 skipped.push(name);
@@ -336,11 +529,24 @@ pub fn install_from_id(
             }
             if dest.exists() {
                 // Replaced content goes to the trash so an update is reversible.
-                let _ = trash::delete(&dest);
+                // A trash failure aborts instead of deleting permanently.
+                trash::delete(&dest).map_err(|e| {
+                    format!(
+                        "Could not move the previous \"{name}\" to the trash; update aborted ({e})"
+                    )
+                })?;
             }
-            crate::copy_dir_recursive(&src, &dest)
-                .map_err(|e| format!("Failed to copy \"{name}\": {e}"))?;
-            record_source(aide_dir, &name, id, &format!("{owner}/{repo}"), head_commit.clone())?;
+            // Stage next to the destination and swap in, so a failed copy never
+            // leaves a partial skill behind.
+            crate::copy_dir_into_place(&src, &dest)
+                .map_err(|e| format!("Failed to install \"{name}\": {e}"))?;
+            record_source(
+                aide_dir,
+                &name,
+                id,
+                &format!("{owner}/{repo}"),
+                head_commit.clone(),
+            )?;
             installed.push(name);
         }
         Ok(RemoteInstallResult { installed, skipped })
@@ -370,7 +576,11 @@ mod tests {
         );
         assert_eq!(
             parse_skill_id("https://github.com/vercel-labs/skills/find-skills").unwrap(),
-            ("vercel-labs".into(), "skills".into(), Some("find-skills".into()))
+            (
+                "vercel-labs".into(),
+                "skills".into(),
+                Some("find-skills".into())
+            )
         );
         assert_eq!(
             parse_skill_id("https://github.com/owner/repo/tree/main").unwrap(),
@@ -411,8 +621,15 @@ mod tests {
         let base = std::env::temp_dir().join(format!("aide-sources-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         fs::create_dir_all(&base).unwrap();
-        record_source(&base, "my-skill", "owner/repo/my-skill", "owner/repo", Some("abc".into())).unwrap();
-        let map = read_sources(&base);
+        record_source(
+            &base,
+            "my-skill",
+            "owner/repo/my-skill",
+            "owner/repo",
+            Some("abc".into()),
+        )
+        .unwrap();
+        let map = read_sources(&base).unwrap();
         let entry = map.get("my-skill").expect("source recorded");
         assert_eq!(entry.id, "owner/repo/my-skill");
         assert_eq!(entry.source, "owner/repo");
@@ -420,8 +637,251 @@ mod tests {
     }
 
     #[test]
+    fn skill_dest_name_prefers_frontmatter_then_id_then_repo() {
+        let base = std::env::temp_dir().join(format!("aide-name-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+
+        let from_frontmatter = base.join("repo-main");
+        fs::create_dir_all(&from_frontmatter).unwrap();
+        fs::write(
+            from_frontmatter.join("SKILL.md"),
+            "---\nname: find-skills\n---\nbody",
+        )
+        .unwrap();
+        assert_eq!(
+            skill_dest_name(&from_frontmatter, None, "repo").unwrap(),
+            "find-skills"
+        );
+
+        // No frontmatter name: fall back to the requested skill segment.
+        let no_frontmatter = base.join("some-dir");
+        fs::create_dir_all(&no_frontmatter).unwrap();
+        fs::write(no_frontmatter.join("SKILL.md"), "plain body").unwrap();
+        assert_eq!(
+            skill_dest_name(&no_frontmatter, Some("wanted-skill"), "repo").unwrap(),
+            "wanted-skill"
+        );
+        // ... and finally to the repository name, never the archive root.
+        assert_eq!(
+            skill_dest_name(&no_frontmatter, None, "repo").unwrap(),
+            "repo"
+        );
+
+        // A frontmatter name that tries to escape the skills directory is
+        // ignored in favour of the safe fallbacks.
+        let evil = base.join("evil");
+        fs::create_dir_all(&evil).unwrap();
+        fs::write(evil.join("SKILL.md"), "---\nname: ../escape\n---\n").unwrap();
+        assert_eq!(
+            skill_dest_name(&evil, Some("safe"), "repo").unwrap(),
+            "safe"
+        );
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn dir_matches_skill_checks_dir_and_frontmatter_name() {
+        let base = std::env::temp_dir().join(format!("aide-match-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let dir = base.join("folder-name");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("SKILL.md"), "---\nname: pretty-name\n---\n").unwrap();
+        assert!(dir_matches_skill(&dir, "folder-name"));
+        assert!(dir_matches_skill(&dir, "pretty-name"));
+        assert!(!dir_matches_skill(&dir, "other"));
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    fn write_escaping_archive(dir: &Path) -> PathBuf {
+        let path = dir.join("escape.tar.gz");
+        let file = fs::File::create(&path).unwrap();
+        let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::fast());
+        let mut builder = tar::Builder::new(encoder);
+        // The tar builder refuses to write traversal paths, so craft the header
+        // by hand to simulate a malicious archive.
+        let mut header = tar::Header::new_gnu();
+        header.set_size(4);
+        header.set_mode(0o644);
+        {
+            let old = header.as_old_mut();
+            let name = b"../escape.txt";
+            old.name[..name.len()].copy_from_slice(name);
+        }
+        header.set_cksum();
+        builder.append(&header, &b"nope"[..]).unwrap();
+        builder.into_inner().unwrap().finish().unwrap();
+        path
+    }
+
+    fn write_test_archive(dir: &Path, entries: &[(&str, &[u8])]) -> PathBuf {
+        let path = dir.join("test.tar.gz");
+        let file = fs::File::create(&path).unwrap();
+        let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::fast());
+        let mut builder = tar::Builder::new(encoder);
+        for (name, data) in entries {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(data.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder.append_data(&mut header, name, *data).unwrap();
+        }
+        builder.into_inner().unwrap().finish().unwrap();
+        path
+    }
+
+    #[test]
+    fn extract_tarball_stages_files_and_rejects_escaping_entries() {
+        let base = std::env::temp_dir().join(format!("aide-tar-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        let archive = write_test_archive(&base, &[("repo-main/SKILL.md", b"hi")]);
+        let dest = base.join("out");
+        fs::create_dir_all(&dest).unwrap();
+        extract_tarball(&archive, &dest).unwrap();
+        assert!(dest.join("repo-main/SKILL.md").is_file());
+
+        let evil = write_escaping_archive(&base);
+        let dest2 = base.join("out2");
+        fs::create_dir_all(&dest2).unwrap();
+        assert!(extract_tarball(&evil, &dest2).is_err());
+        assert!(!base.join("escape.txt").exists());
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn extraction_limits_reject_oversized_members() {
+        assert!(check_extraction_limits(1024, 0).is_ok());
+        assert!(check_extraction_limits(MAX_EXTRACTED_FILE_BYTES + 1, 0).is_err());
+        assert!(check_extraction_limits(1024, MAX_EXTRACTED_TOTAL_BYTES).is_err());
+    }
+
+    #[test]
+    fn read_sources_distinguishes_missing_from_corrupt() {
+        let base = std::env::temp_dir().join(format!("aide-sources-bad-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        assert!(read_sources(&base).unwrap().is_empty());
+        fs::write(sources_path(&base), "{\"broken\":").unwrap();
+        assert!(read_sources(&base).is_err());
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
     fn urlencode_encodes_specials() {
         assert_eq!(urlencode("react native"), "react%20native");
         assert_eq!(urlencode("a-b_c.d~e"), "a-b_c.d~e");
+    }
+
+    #[test]
+    fn update_targets_dedupes_by_owner_repo_and_subtree() {
+        let mut sources = HashMap::new();
+        for (skill, id) in [
+            ("a", "owner/repo/skill-a"),
+            ("b", "owner/repo/skill-b"),
+            ("c", "owner/repo/other-subtree"),
+            ("d", "owner/other-repo"),
+            ("e", "not-an-id"),
+        ] {
+            sources.insert(
+                skill.to_string(),
+                SkillSource {
+                    id: id.to_string(),
+                    source: "owner/repo".to_string(),
+                    installed_at: 0,
+                    commit: Some("sha".to_string()),
+                },
+            );
+        }
+        // A source without a recorded commit needs no lookup.
+        sources.insert(
+            "local".to_string(),
+            SkillSource {
+                id: "owner/repo/local".to_string(),
+                source: "local".to_string(),
+                installed_at: 0,
+                commit: None,
+            },
+        );
+        let targets = update_targets(&sources);
+        let keys: Vec<&str> = targets.iter().map(|(key, ..)| key.as_str()).collect();
+        assert_eq!(
+            keys,
+            vec![
+                "owner/other-repo",
+                "owner/repo/other-subtree",
+                "owner/repo/skill-a",
+                "owner/repo/skill-b",
+            ]
+        );
+    }
+
+    #[test]
+    fn head_cache_serves_fresh_entries_and_refetches_expired_ones() {
+        let mut cache = HashMap::new();
+        let mut fetches = 0;
+        let now = 10_000;
+
+        let (first, changed) = cached_or_fetch_head("owner/repo", &mut cache, now, || {
+            fetches += 1;
+            Ok("sha-1".to_string())
+        })
+        .unwrap();
+        assert_eq!(first, "sha-1");
+        assert!(changed);
+
+        // Inside the TTL the cached commit is returned without a network call.
+        let (cached, changed) = cached_or_fetch_head("owner/repo", &mut cache, now + 60, || {
+            fetches += 1;
+            Ok("sha-2".to_string())
+        })
+        .unwrap();
+        assert_eq!(cached, "sha-1");
+        assert!(!changed);
+        assert_eq!(fetches, 1);
+
+        // At the TTL boundary the entry is refreshed.
+        let (refreshed, changed) =
+            cached_or_fetch_head("owner/repo", &mut cache, now + UPDATE_CACHE_TTL, || {
+                fetches += 1;
+                Ok("sha-2".to_string())
+            })
+            .unwrap();
+        assert_eq!(refreshed, "sha-2");
+        assert!(changed);
+        assert_eq!(fetches, 2);
+
+        // A failed lookup is not cached, so the next check retries it.
+        assert!(cached_or_fetch_head("owner/broken", &mut cache, now, || {
+            Err("github down".to_string())
+        })
+        .is_err());
+        assert!(!cache.contains_key("owner/broken"));
+    }
+
+    #[test]
+    fn head_cache_round_trips_and_ignores_a_corrupt_cache_file() {
+        let base = std::env::temp_dir().join(format!("aide-head-cache-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        let mut cache = HashMap::new();
+        cache.insert(
+            "owner/repo".to_string(),
+            HeadCacheEntry {
+                commit: "abc".to_string(),
+                fetched_at: 42,
+            },
+        );
+        write_head_cache(&base, &cache).unwrap();
+        let read = read_head_cache(&base);
+        assert_eq!(
+            read.get("owner/repo").map(|e| e.commit.as_str()),
+            Some("abc")
+        );
+        assert_eq!(read.get("owner/repo").map(|e| e.fetched_at), Some(42));
+
+        // Derived data: a broken cache is ignored, not fatal.
+        fs::write(head_cache_path(&base), "{broken").unwrap();
+        assert!(read_head_cache(&base).is_empty());
+        let _ = fs::remove_dir_all(&base);
     }
 }

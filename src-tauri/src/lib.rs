@@ -1,4 +1,6 @@
-use std::path::Path;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 use std::{fs, io};
 
@@ -9,6 +11,7 @@ pub mod git_sync;
 pub mod mcp;
 pub mod models;
 pub mod registry;
+pub mod storage;
 
 #[derive(Debug, Serialize)]
 pub struct FileEntry {
@@ -62,30 +65,36 @@ fn read_dir_entries(path: &Path) -> io::Result<Vec<FileEntry>> {
     Ok(entries)
 }
 
-const SKILL_COUNT_IGNORED_DIRS: &[&str] = &[
-    "node_modules", ".git", ".pnpm", "dist", ".next", "target",
-];
+const SKILL_COUNT_IGNORED_DIRS: &[&str] =
+    &["node_modules", ".git", ".pnpm", "dist", ".next", "target"];
 
 const SKILL_TEXT_EXTENSIONS: &[&str] = &[
-    "md", "markdown", "json", "jsonc", "yaml", "yml", "toml", "txt",
-    "js", "ts", "jsx", "tsx", "css", "html", "sh", "bash", "env",
+    "md", "markdown", "json", "jsonc", "yaml", "yml", "toml", "txt", "js", "ts", "jsx", "tsx",
+    "css", "html", "sh", "bash", "env",
 ];
 
 const SEARCH_MAX_FILE_SIZE: u64 = 512 * 1024;
 const SEARCH_MAX_PER_SKILL: usize = 5;
 const SEARCH_MAX_MATCHES: usize = 50;
 
+/// Count files below `path`. Symlinks are not followed and never counted, so a
+/// symlink cycle cannot make this recurse forever.
 fn count_files(path: &Path) -> usize {
     let mut count = 0;
     if let Ok(entries) = fs::read_dir(path) {
         for entry in entries.flatten() {
-            let p = entry.path();
-            if p.is_dir() {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_dir() {
                 let name = entry.file_name().to_string_lossy().to_string();
                 if !SKILL_COUNT_IGNORED_DIRS.contains(&name.as_str()) {
-                    count += count_files(&p);
+                    count += count_files(&entry.path());
                 }
-            } else {
+            } else if file_type.is_file() {
                 count += 1;
             }
         }
@@ -93,23 +102,182 @@ fn count_files(path: &Path) -> usize {
     count
 }
 
-pub(crate) fn copy_dir_recursive(src: &Path, dst: &Path) -> io::Result<()> {    fs::create_dir_all(dst)?;
+/// Copy a directory tree. Symlinks are skipped instead of followed: following
+/// them could escape the skill folder or loop forever.
+pub(crate) fn copy_dir_recursive(src: &Path, dst: &Path) -> io::Result<()> {
+    fs::create_dir_all(dst)?;
     for entry in fs::read_dir(src)? {
         let entry = entry?;
         let from = entry.path();
         let name = entry.file_name();
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            continue;
+        }
         // Never copy dependency/build artifacts into the central store.
-        if from.is_dir() && SKILL_COUNT_IGNORED_DIRS.contains(&name.to_string_lossy().as_ref()) {
+        if file_type.is_dir() && SKILL_COUNT_IGNORED_DIRS.contains(&name.to_string_lossy().as_ref())
+        {
             continue;
         }
         let to = dst.join(&name);
-        if from.is_dir() {
+        if file_type.is_dir() {
             copy_dir_recursive(&from, &to)?;
         } else {
             fs::copy(&from, &to)?;
         }
     }
     Ok(())
+}
+
+fn unique_stamp() -> String {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nanos = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{nanos}-{}", COUNTER.fetch_add(1, Ordering::Relaxed))
+}
+
+/// A hidden, unique sibling path used while staging directory swaps.
+pub(crate) fn swap_sibling(dst: &Path, tag: &str) -> PathBuf {
+    let name = dst
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "dir".to_string());
+    let parent = dst.parent().unwrap_or_else(|| Path::new("."));
+    parent.join(format!(".aide-{tag}-{name}-{}", unique_stamp()))
+}
+
+fn remove_path(path: &Path) {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.is_dir() => {
+            let _ = fs::remove_dir_all(path);
+        }
+        Ok(_) => {
+            let _ = fs::remove_file(path);
+        }
+        Err(_) => {}
+    }
+}
+
+/// Replace `dst` with a copy of `src` without ever leaving `dst` missing or
+/// half-written: the copy is staged next to the destination, the previous
+/// directory is only moved aside once staging succeeded, and the swap is done
+/// with renames. The displaced directory is removed after a successful swap and
+/// restored if the final rename fails.
+pub(crate) fn copy_dir_into_place(src: &Path, dst: &Path) -> Result<(), String> {
+    if let Some(parent) = dst.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
+    }
+    let staging = swap_sibling(dst, "new");
+    copy_dir_recursive(src, &staging).map_err(|e| format!("copy {}: {e}", src.display()))?;
+
+    let existed = fs::symlink_metadata(dst).is_ok();
+    let displaced = swap_sibling(dst, "old");
+    if existed {
+        if let Err(err) = fs::rename(dst, &displaced) {
+            let _ = fs::remove_dir_all(&staging);
+            return Err(format!("move {} aside: {err}", dst.display()));
+        }
+    }
+    match fs::rename(&staging, dst) {
+        Ok(()) => {
+            if existed {
+                remove_path(&displaced);
+            }
+            Ok(())
+        }
+        Err(err) => {
+            if existed {
+                let _ = fs::rename(&displaced, dst);
+            }
+            let _ = fs::remove_dir_all(&staging);
+            Err(format!("replace {}: {err}", dst.display()))
+        }
+    }
+}
+
+/// Move a file or directory, falling back to copy-then-remove when the two
+/// paths live on different devices (or when rename is otherwise unsupported).
+pub(crate) fn move_path(src: &Path, dst: &Path) -> Result<(), String> {
+    if let Some(parent) = dst.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
+    }
+    match fs::rename(src, dst) {
+        Ok(()) => Ok(()),
+        Err(_) => {
+            let meta =
+                fs::symlink_metadata(src).map_err(|e| format!("stat {}: {e}", src.display()))?;
+            if meta.is_dir() {
+                copy_dir_into_place(src, dst)?;
+                fs::remove_dir_all(src).map_err(|e| format!("remove {}: {e}", src.display()))
+            } else {
+                fs::copy(src, dst).map_err(|e| format!("copy {}: {e}", src.display()))?;
+                fs::remove_file(src).map_err(|e| format!("remove {}: {e}", src.display()))
+            }
+        }
+    }
+}
+
+/// Find skill directories (folders containing SKILL.md) below `root`, without
+/// following symlinks. Depth is bounded so malformed trees cannot run away.
+fn find_skill_dirs(root: &Path) -> Vec<PathBuf> {
+    const MAX_DEPTH: usize = 4;
+    let mut out = Vec::new();
+    let mut stack = vec![(root.to_path_buf(), 0usize)];
+    while let Some((dir, depth)) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut paths: Vec<_> = entries.flatten().collect();
+        paths.sort_by_key(|e| e.file_name());
+        for entry in paths {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_symlink() || !file_type.is_dir() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            if SKILL_COUNT_IGNORED_DIRS.contains(&name.as_str()) {
+                continue;
+            }
+            let path = entry.path();
+            if path.join("SKILL.md").is_file() {
+                out.push(path);
+            } else if depth + 1 < MAX_DEPTH {
+                stack.push((path, depth + 1));
+            }
+        }
+    }
+    out
+}
+
+/// Split a markdown document into YAML frontmatter and body. Only a leading
+/// `---` line followed by a closing `---` line counts, so a horizontal rule in
+/// the body is never mistaken for a delimiter. The body keeps its exact
+/// trailing bytes.
+pub(crate) fn split_frontmatter(content: &str) -> Option<(&str, &str)> {
+    let content = content.strip_prefix('\u{feff}').unwrap_or(content);
+    let mut offset = 0usize;
+    let mut first = true;
+    for line in content.split_inclusive('\n') {
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        if first {
+            if trimmed.trim() != "---" {
+                return None;
+            }
+            first = false;
+            offset += line.len();
+            continue;
+        }
+        if trimmed.trim() == "---" {
+            let yaml = &content[content.find('\n').map(|i| i + 1).unwrap_or(0)..offset];
+            return Some((yaml, &content[offset + line.len()..]));
+        }
+        offset += line.len();
+    }
+    None
 }
 
 fn import_skill_into(source: &Path, skills_dir: &Path) -> Result<String, String> {
@@ -179,8 +347,12 @@ pub fn search_skills_in(dir: &Path, query: &str) -> Vec<SkillSearchMatch> {
     };
     let mut skill_paths: Vec<_> = skills
         .flatten()
+        .filter(|e| {
+            e.file_type()
+                .map(|t| t.is_dir() || t.is_symlink())
+                .unwrap_or(false)
+        })
         .map(|e| e.path())
-        .filter(|p| p.is_dir())
         .collect();
     skill_paths.sort();
     'outer: for skill_path in skill_paths {
@@ -195,16 +367,28 @@ pub fn search_skills_in(dir: &Path, query: &str) -> Vec<SkillSearchMatch> {
 
         let mut per_skill = 0;
         let mut stack = vec![skill_path.clone()];
+        // Guards against symlink cycles; symlinks are skipped below anyway.
+        let mut visited: HashSet<PathBuf> = HashSet::new();
         while let Some(current) = stack.pop() {
-            let Ok(entries) = fs::read_dir(&current) else { continue };
-            let mut paths: Vec<_> = entries.flatten().map(|e| e.path()).collect();
-            paths.sort();
-            for p in paths {
-                let name = p
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                if p.is_dir() {
+            let key = fs::canonicalize(&current).unwrap_or_else(|_| current.clone());
+            if !visited.insert(key) {
+                continue;
+            }
+            let Ok(entries) = fs::read_dir(&current) else {
+                continue;
+            };
+            let mut paths: Vec<_> = entries.flatten().collect();
+            paths.sort_by_key(|e| e.file_name());
+            for entry in paths {
+                let p = entry.path();
+                let name = entry.file_name().to_string_lossy().to_string();
+                let Ok(file_type) = entry.file_type() else {
+                    continue;
+                };
+                if file_type.is_symlink() {
+                    continue;
+                }
+                if file_type.is_dir() {
                     if !SKILL_COUNT_IGNORED_DIRS.contains(&name.as_str()) {
                         stack.push(p);
                     }
@@ -218,7 +402,11 @@ pub fn search_skills_in(dir: &Path, query: &str) -> Vec<SkillSearchMatch> {
                 if !ext_ok {
                     continue;
                 }
-                if fs::metadata(&p).map(|m| m.len() > SEARCH_MAX_FILE_SIZE).unwrap_or(true) {
+                if entry
+                    .metadata()
+                    .map(|m| m.len() > SEARCH_MAX_FILE_SIZE)
+                    .unwrap_or(true)
+                {
                     continue;
                 }
                 let remaining = SEARCH_MAX_PER_SKILL.saturating_sub(per_skill);
@@ -246,80 +434,73 @@ pub fn search_skills_in(dir: &Path, query: &str) -> Vec<SkillSearchMatch> {
 
 fn extract_tags(value: &serde_norway::Value) -> Vec<String> {
     match value {
-        serde_norway::Value::Sequence(arr) => {
-            arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
-        }
-        serde_norway::Value::String(s) => {
-            s.split(|c: char| c == ' ' || c == ',' || c == '，')
-                .map(|s| s.trim())
-                .filter(|s| !s.is_empty())
-                .map(|s| s.to_string())
-                .collect()
-        }
+        serde_norway::Value::Sequence(arr) => arr
+            .iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect(),
+        serde_norway::Value::String(s) => s
+            .split([' ', ',', '，'])
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .collect(),
         _ => Vec::new(),
     }
 }
 
 fn parse_skill_frontmatter(content: &str) -> (Option<String>, Option<String>, Vec<String>) {
-    let content = content.trim();
-    if !content.starts_with("---") {
+    let Some((yaml_str, _)) = split_frontmatter(content) else {
         return (None, None, Vec::new());
-    }
-    let rest = content[3..].trim();
-    if let Some(end) = rest.find("---") {
-        let yaml_str = &rest[..end];
-        if let Ok(val) = serde_norway::from_str::<serde_norway::Value>(yaml_str) {
-            let mapping = match &val {
-                serde_norway::Value::Mapping(m) => m,
-                _ => return (None, None, Vec::new()),
-            };
-            let name = mapping
-                .get(&serde_norway::Value::String("name".into()))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            let desc = mapping
-                .get(&serde_norway::Value::String("description".into()))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            let tags = mapping
-                .get(&serde_norway::Value::String("tags".into()))
+    };
+    let Ok(serde_norway::Value::Mapping(mapping)) =
+        serde_norway::from_str::<serde_norway::Value>(yaml_str)
+    else {
+        return (None, None, Vec::new());
+    };
+    let name = mapping
+        .get(serde_norway::Value::String("name".into()))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let desc = mapping
+        .get(serde_norway::Value::String("description".into()))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let tags = mapping
+        .get(serde_norway::Value::String("tags".into()))
+        .map(extract_tags)
+        .filter(|t| !t.is_empty())
+        .or_else(|| {
+            mapping
+                .get(serde_norway::Value::String("metadata".into()))
+                .and_then(|v| v.as_mapping())
+                .and_then(|m| m.get(serde_norway::Value::String("tags".into())))
                 .map(extract_tags)
-                .filter(|t| !t.is_empty())
-                .or_else(|| {
-                    mapping
-                        .get(&serde_norway::Value::String("metadata".into()))
-                        .and_then(|v| v.as_mapping())
-                        .and_then(|m| m.get(&serde_norway::Value::String("tags".into())))
-                        .map(extract_tags)
-                })
-                .unwrap_or_default();
-            return (name, desc, tags);
-        }
-    }
-    (None, None, Vec::new())
+        })
+        .unwrap_or_default();
+    (name, desc, tags)
+}
+
+/// Frontmatter `name` of the SKILL.md in `dir`, when present and non-empty.
+pub(crate) fn skill_frontmatter_name(dir: &Path) -> Option<String> {
+    let content = fs::read_to_string(dir.join("SKILL.md")).ok()?;
+    parse_skill_frontmatter(&content)
+        .0
+        .map(|n| n.trim().to_string())
+        .filter(|n| !n.is_empty())
 }
 
 /// Core of `list_skills`, shared with the aide-mcp agent binary.
 pub fn skill_infos() -> Result<Vec<SkillInfo>, String> {
-    let skills_dir = dirs::home_dir()
-        .ok_or_else(|| "Cannot find home directory".to_string())?
-        .join(".agents")
-        .join("skills");
+    let home = dirs::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
+    let aide_dir = home.join(".aide");
+    let skills_dir = home.join(".agents").join("skills");
 
     if !skills_dir.exists() {
         return Ok(Vec::new());
     }
 
-    let sources = registry::read_sources(
-        &dirs::home_dir()
-            .map(|h| h.join(".aide"))
-            .unwrap_or_default(),
-    );
-    let git_config = git_sync::read_config(
-        &dirs::home_dir()
-            .map(|h| h.join(".aide"))
-            .unwrap_or_default(),
-    );
+    let sources = registry::read_sources(&aide_dir)?;
+    let git_config = git_sync::read_config(&aide_dir)?;
 
     let mut skills = Vec::new();
     for entry in fs::read_dir(&skills_dir).map_err(|e| e.to_string())? {
@@ -333,7 +514,9 @@ pub fn skill_infos() -> Result<Vec<SkillInfo>, String> {
         let meta = entry.metadata().map_err(|e| e.to_string())?;
         let is_symlink = meta.is_symlink();
         let target_path = if is_symlink {
-            fs::read_link(&path).ok().map(|p| p.to_string_lossy().to_string())
+            fs::read_link(&path)
+                .ok()
+                .map(|p| p.to_string_lossy().to_string())
         } else {
             None
         };
@@ -352,12 +535,9 @@ pub fn skill_infos() -> Result<Vec<SkillInfo>, String> {
             }
         };
 
-        let file_count = if is_symlink {
-            let real_path = fs::read_link(&path).unwrap_or(path.clone());
-            count_files(&real_path)
-        } else {
-            count_files(&path)
-        };
+        // read_dir on a symlinked skill follows the link, and count_files never
+        // descends into symlinks inside the tree.
+        let file_count = count_files(&path);
 
         skills.push(SkillInfo {
             name: name.clone(),
@@ -401,12 +581,11 @@ fn explicit_scope(config: &git_sync::GitRemotesConfig, skill: &str) -> Option<St
 }
 
 #[tauri::command]
-fn get_git_config() -> git_sync::GitRemotesConfig {
-    git_sync::read_config(
-        &dirs::home_dir()
-            .map(|h| h.join(".aide"))
-            .unwrap_or_default(),
-    )
+fn get_git_config() -> Result<git_sync::GitRemotesConfig, String> {
+    let aide_dir = dirs::home_dir()
+        .ok_or_else(|| "Cannot find home directory".to_string())?
+        .join(".aide");
+    git_sync::read_config(&aide_dir)
 }
 
 #[tauri::command]
@@ -422,7 +601,7 @@ fn set_skill_scope(skill: String, scope: Option<String>) -> Result<(), String> {
     let aide_dir = dirs::home_dir()
         .map(|h| h.join(".aide"))
         .ok_or_else(|| "Cannot find home directory".to_string())?;
-    let mut config = git_sync::read_config(&aide_dir);
+    let mut config = git_sync::read_config(&aide_dir)?;
     match scope {
         Some(s) => {
             config.skill_scopes.insert(skill, s);
@@ -434,26 +613,27 @@ fn set_skill_scope(skill: String, scope: Option<String>) -> Result<(), String> {
     git_sync::write_config(&aide_dir, &config)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn publish_scope(scope: String) -> Result<git_sync::PublishOutcome, String> {
     let home = dirs::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
     let aide_dir = home.join(".aide");
-    let config = git_sync::read_config(&aide_dir);
+    let config = git_sync::read_config(&aide_dir)?;
     let skills_dir = resolve_skills_source()?;
     git_sync::publish_scope(&config, &skills_dir, &aide_dir, &scope)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn pull_scope(scope: String) -> Result<git_sync::PullOutcome, String> {
     let home = dirs::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
     let aide_dir = home.join(".aide");
-    let config = git_sync::read_config(&aide_dir);
+    let config = git_sync::read_config(&aide_dir)?;
     let skills_dir = resolve_skills_source()?;
     git_sync::pull_scope(&config, &skills_dir, &aide_dir, &scope)
 }
 
 #[tauri::command]
-fn import_skill(source: String) -> Result<String, String> {    let skills_dir = resolve_skills_source()?;
+fn import_skill(source: String) -> Result<String, String> {
+    let skills_dir = resolve_skills_source()?;
     let name = import_skill_into(Path::new(&source), &skills_dir)?;
     if let Some(home) = dirs::home_dir() {
         // Record where the skill came from so provenance is visible in the UI.
@@ -462,12 +642,12 @@ fn import_skill(source: String) -> Result<String, String> {    let skills_dir = 
     Ok(name)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn search_registry(query: String) -> Result<Vec<registry::RegistrySkill>, String> {
     registry::search_registry(&query, 24)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn install_skill_from_registry(id: String) -> Result<registry::RemoteInstallResult, String> {
     let home = dirs::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
     let skills_dir = resolve_skills_source()?;
@@ -475,20 +655,19 @@ fn install_skill_from_registry(id: String) -> Result<registry::RemoteInstallResu
     registry::install_from_id(&id, &skills_dir, &home.join(".aide"), false)
 }
 
-#[tauri::command]
-fn check_skill_updates() -> Vec<registry::SkillUpdate> {
-    registry::check_updates(
-        &dirs::home_dir()
-            .map(|h| h.join(".aide"))
-            .unwrap_or_default(),
-    )
+#[tauri::command(async)]
+fn check_skill_updates() -> Result<Vec<registry::SkillUpdate>, String> {
+    let aide_dir = dirs::home_dir()
+        .ok_or_else(|| "Cannot find home directory".to_string())?
+        .join(".aide");
+    registry::check_updates(&aide_dir)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn update_skill(skill: String) -> Result<registry::RemoteInstallResult, String> {
     let home = dirs::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
     let aide_dir = home.join(".aide");
-    let sources = registry::read_sources(&aide_dir);
+    let sources = registry::read_sources(&aide_dir)?;
     let meta = sources
         .get(&skill)
         .ok_or_else(|| format!("No install source recorded for \"{skill}\""))?
@@ -500,7 +679,7 @@ fn update_skill(skill: String) -> Result<registry::RemoteInstallResult, String> 
 
 // ── Model/provider management ──
 
-#[tauri::command]
+#[tauri::command(async)]
 fn list_model_providers(force: Option<bool>) -> Result<Vec<models::ProviderSummary>, String> {
     let home = dirs::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
     models::fetch_models_dev(&home.join(".aide"), force.unwrap_or(false))
@@ -509,7 +688,7 @@ fn list_model_providers(force: Option<bool>) -> Result<Vec<models::ProviderSumma
 #[tauri::command]
 fn list_model_profiles() -> Result<models::ModelProfilesConfig, String> {
     let home = dirs::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
-    Ok(models::read_profiles(&home.join(".aide")))
+    models::read_profiles(&home.join(".aide"))
 }
 
 #[tauri::command]
@@ -522,7 +701,7 @@ fn save_model_profiles(config: models::ModelProfilesConfig) -> Result<(), String
 fn sync_model_profile(profile_id: String) -> Result<Vec<models::ModelSyncResult>, String> {
     let home = dirs::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
     let aide_dir = home.join(".aide");
-    let config = models::read_profiles(&aide_dir);
+    let config = models::read_profiles(&aide_dir)?;
     let profile = config
         .profiles
         .iter()
@@ -537,7 +716,7 @@ fn sync_model_profile(profile_id: String) -> Result<Vec<models::ModelSyncResult>
 fn sync_all_model_profiles() -> Result<Vec<models::ModelProfileSyncResult>, String> {
     let home = dirs::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
     let aide_dir = home.join(".aide");
-    let config = models::read_profiles(&aide_dir);
+    let config = models::read_profiles(&aide_dir)?;
     let providers = models::fetch_models_dev(&aide_dir, false)?;
     Ok(models::sync_all_profiles(&config, &providers, &home))
 }
@@ -564,15 +743,26 @@ pub struct AgentServerStatus {
 #[tauri::command]
 fn get_agent_server() -> AgentServerStatus {
     let binary = sidecar_path();
-    let enabled = binary.is_some()
-        && mcp::read_central()
-            .map(|c| {
-                c.servers
+    // Enabled only when the registered command still points at the sidecar that
+    // ships with the running build: after an upgrade the stored path is stale
+    // and the agent would silently fail to start.
+    let enabled = binary.as_ref().is_some_and(|current| {
+        mcp::read_central()
+            .map(|central| {
+                central
+                    .servers
                     .get(AGENT_SERVER_NAME)
-                    .map(|s| !s.disabled.unwrap_or(false))
+                    .map(|s| {
+                        !s.disabled.unwrap_or(false)
+                            && s.command
+                                .as_deref()
+                                .map(|cmd| Path::new(cmd) == current.as_path())
+                                .unwrap_or(false)
+                    })
                     .unwrap_or(false)
             })
-            .unwrap_or(false);
+            .unwrap_or(false)
+    });
     AgentServerStatus {
         enabled,
         binary_available: binary.is_some(),
@@ -584,8 +774,7 @@ fn get_agent_server() -> AgentServerStatus {
 fn enable_agent_access(enable: bool) -> Result<AgentServerStatus, String> {
     let mut central = mcp::read_central()?;
     if enable {
-        let path = sidecar_path()
-            .ok_or("aide-mcp binary not found next to the running app")?;
+        let path = sidecar_path().ok_or("aide-mcp binary not found next to the running app")?;
         central.servers.insert(
             AGENT_SERVER_NAME.to_string(),
             mcp::McpServerConfig {
@@ -595,9 +784,7 @@ fn enable_agent_access(enable: bool) -> Result<AgentServerStatus, String> {
                 env: None,
                 headers: None,
                 disabled: Some(false),
-                description: Some(
-                    "aide agent access: install, update and publish skills".into(),
-                ),
+                description: Some("aide agent access: install, update and publish skills".into()),
                 targets: vec![],
             },
         );
@@ -605,10 +792,38 @@ fn enable_agent_access(enable: bool) -> Result<AgentServerStatus, String> {
         central.servers.remove(AGENT_SERVER_NAME);
     }
     mcp::save_central(&central)?;
+    if !enable {
+        // Disabling must also remove the entry from every tool config where aide
+        // wrote it. Best effort: the central entry is already gone, so a failing
+        // tool config is surfaced instead of rolled back silently.
+        let managed = mcp::read_managed().map_err(|e| {
+            format!("Agent access disabled, but the MCP manifest is unreadable so tool configs were left untouched: {e}")
+        })?;
+        let mut first_error: Option<String> = None;
+        for adapter in mcp::all_mcp_adapters() {
+            let installed = adapter
+                .resolve_path()
+                .map(|path| path.exists())
+                .unwrap_or(false);
+            if !installed && !managed.tools.contains_key(adapter.key) {
+                continue;
+            }
+            if let Err(err) = mcp::sync_to_tool(&adapter, &central) {
+                if first_error.is_none() {
+                    first_error = Some(err);
+                }
+            }
+        }
+        if let Some(err) = first_error {
+            return Err(format!(
+                "Agent access disabled, but syncing one or more tool configs failed: {err}"
+            ));
+        }
+    }
     Ok(get_agent_server())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn search_skills(query: String) -> Result<Vec<SkillSearchMatch>, String> {
     let dir = resolve_skills_source()?;
     if !dir.exists() {
@@ -624,110 +839,132 @@ fn read_text_file(path: String) -> Result<String, String> {
 
 #[tauri::command]
 fn write_text_file(path: String, content: String) -> Result<(), String> {
-    if let Some(parent) = Path::new(&path).parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    fs::write(&path, &content).map_err(|e| e.to_string())
+    // Config files and skill sources are edited in-app; a crash mid-write must
+    // never truncate them, so reuse the same atomic writer as the config stores.
+    storage::atomic_write(Path::new(&path), content.as_bytes())
 }
 
 #[tauri::command]
 fn create_file(path: String) -> Result<(), String> {
-    if let Some(parent) = Path::new(&path).parent() {
+    let target = Path::new(&path);
+    if fs::symlink_metadata(target).is_ok() {
+        return Err(format!("A file or folder already exists at {path}"));
+    }
+    if let Some(parent) = target.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    fs::File::create(&path).map_err(|e| e.to_string())?;
+    // create_new guarantees we never truncate a file created concurrently.
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(target)
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
 #[tauri::command]
 fn create_directory(path: String) -> Result<(), String> {
-    fs::create_dir_all(&path).map_err(|e| e.to_string())
+    let target = Path::new(&path);
+    match fs::symlink_metadata(target) {
+        Ok(meta) if !meta.is_dir() => {
+            return Err(format!("A file already exists at {path}"));
+        }
+        _ => {}
+    }
+    fs::create_dir_all(target).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn delete_entry(path: String) -> Result<(), String> {
     // Move to the system trash instead of permanent deletion so mistakes are
-    // recoverable. Fall back to permanent removal if the trash operation fails.
-    if trash::delete(&path).is_ok() {
-        return Ok(());
-    }
-    let p = Path::new(&path);
-    if p.is_dir() {
-        fs::remove_dir_all(p).map_err(|e| e.to_string())
-    } else {
-        fs::remove_file(p).map_err(|e| e.to_string())
-    }
+    // recoverable. Never silently fall back to a permanent delete: a failing
+    // trash would otherwise destroy user data with no way back.
+    trash::delete(&path)
+        .map_err(|e| format!("Could not move {path} to the trash; nothing was deleted ({e})"))
 }
 
 #[tauri::command]
 fn rename_entry(old_path: String, new_path: String) -> Result<(), String> {
+    if fs::symlink_metadata(&new_path).is_ok() {
+        return Err(format!("A file or folder already exists at {new_path}"));
+    }
+    if fs::symlink_metadata(&old_path).is_err() {
+        return Err(format!("No such file or folder: {old_path}"));
+    }
     fs::rename(&old_path, &new_path).map_err(|e| e.to_string())
+}
+
+/// Rewrite the `tags` array in a SKILL.md frontmatter, keeping the rest of the
+/// document untouched. The new frontmatter is re-parsed before it is written so
+/// a serialization problem can never corrupt the skill definition.
+fn update_skill_tags_in(home: &Path, skill_dir: &Path, tags: &[String]) -> Result<(), String> {
+    let skill_md = skill_dir.join("SKILL.md");
+    let content =
+        fs::read_to_string(&skill_md).map_err(|e| format!("read {}: {e}", skill_md.display()))?;
+
+    let tags_key = serde_norway::Value::String("tags".into());
+    let metadata_key = serde_norway::Value::String("metadata".into());
+
+    let (mut mapping, body) = match split_frontmatter(&content) {
+        Some((yaml, body)) => {
+            let mapping = if yaml.trim().is_empty() {
+                serde_norway::Mapping::new()
+            } else {
+                match serde_norway::from_str::<serde_norway::Value>(yaml).map_err(|e| {
+                    format!("Invalid YAML frontmatter in {}: {e}", skill_md.display())
+                })? {
+                    serde_norway::Value::Mapping(mapping) => mapping,
+                    _ => {
+                        return Err(format!(
+                            "Frontmatter in {} is not a YAML mapping; refusing to rewrite it",
+                            skill_md.display()
+                        ))
+                    }
+                }
+            };
+            (mapping, body.to_string())
+        }
+        None => {
+            if tags.is_empty() {
+                // Nothing to remove and no frontmatter to create.
+                return Ok(());
+            }
+            (serde_norway::Mapping::new(), content.clone())
+        }
+    };
+
+    if tags.is_empty() {
+        mapping.remove(&tags_key);
+    } else {
+        mapping.insert(
+            tags_key.clone(),
+            serde_norway::Value::Sequence(
+                tags.iter()
+                    .map(|t| serde_norway::Value::String(t.clone()))
+                    .collect(),
+            ),
+        );
+    }
+    // Tags live at the top level only; drop the legacy nested copy so the two
+    // cannot drift apart.
+    if let Some(serde_norway::Value::Mapping(metadata)) = mapping.get_mut(&metadata_key) {
+        metadata.remove(&tags_key);
+    }
+
+    let yaml = serde_norway::to_string(&serde_norway::Value::Mapping(mapping))
+        .map_err(|e| format!("serialize frontmatter: {e}"))?;
+    serde_norway::from_str::<serde_norway::Value>(&yaml)
+        .map_err(|e| format!("refusing to write invalid frontmatter: {e}"))?;
+    let new_content = format!("---\n{yaml}---\n{body}");
+
+    let backups = home.join(".aide").join("backups");
+    storage::write_bytes(&skill_md, new_content.as_bytes(), Some(&backups))
 }
 
 #[tauri::command]
 fn update_skill_tags(path: String, tags: Vec<String>) -> Result<(), String> {
-    let skill_md = Path::new(&path).join("SKILL.md");
-    let content = fs::read_to_string(&skill_md).map_err(|e| e.to_string())?;
-    let content = content.trim();
-
-    let tags_line = if tags.is_empty() {
-        String::new()
-    } else {
-        let joined = tags
-            .iter()
-            .map(|t| format!("\"{}\"", t))
-            .collect::<Vec<_>>()
-            .join(", ");
-        format!("tags: [{}]", joined)
-    };
-
-    let new_content = if content.starts_with("---") {
-        let rest = &content[3..];
-        if let Some(end) = rest.find("---") {
-            let front = &rest[..end];
-            let body_start = end + 3;
-            let body = &rest[body_start..];
-
-            let lines: Vec<&str> = front.lines().collect();
-            let mut out_lines: Vec<String> = Vec::new();
-            let mut tags_written = false;
-            let mut inside_metadata = false;
-
-            for line in &lines {
-                let indent = line.len() - line.trim_start().len();
-                let trimmed = line.trim();
-                if indent == 0 {
-                    inside_metadata = trimmed.starts_with("metadata:");
-                    if trimmed.starts_with("tags:") && !tags_written {
-                        if !tags_line.is_empty() {
-                            out_lines.push(tags_line.clone());
-                        }
-                        tags_written = true;
-                        continue;
-                    }
-                } else if inside_metadata && trimmed.starts_with("tags:") {
-                    // Tags are canonical at the top level; drop the nested
-                    // metadata copy so the two cannot go out of sync.
-                    continue;
-                }
-                out_lines.push(line.to_string());
-            }
-
-            if !tags_written && !tags_line.is_empty() {
-                out_lines.push(tags_line);
-            }
-
-            format!("---\n{}\n---{}", out_lines.join("\n"), body)
-        } else {
-            return Err("Invalid frontmatter: no closing ---".to_string());
-        }
-    } else if !tags_line.is_empty() {
-        format!("---\n{}\n---\n{}", tags_line, content)
-    } else {
-        return Ok(());
-    };
-
-    fs::write(&skill_md, &new_content).map_err(|e| e.to_string())
+    let home = dirs::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
+    update_skill_tags_in(&home, Path::new(&path), &tags)
 }
 
 #[tauri::command]
@@ -784,7 +1021,15 @@ fn compute_tool_status(t: &adapter::ToolInfo) -> String {
     let target = home.join(t.global_skills);
     if target.is_symlink() {
         if let Ok(link) = std::fs::read_link(&target) {
-            if link == resolve_skills_source().unwrap_or_default() {
+            let resolved = if link.is_absolute() {
+                link
+            } else {
+                target
+                    .parent()
+                    .map(|parent| parent.join(&link))
+                    .unwrap_or(link)
+            };
+            if same_path(&resolved, &resolve_skills_source().unwrap_or_default()) {
                 return "synced".into();
             }
         }
@@ -824,35 +1069,57 @@ pub struct SyncResult {
     pub error: Option<String>,
 }
 
-fn gather_skills(dir: &Path) -> io::Result<Vec<String>> {
-    let mut skills = Vec::new();
-    if !dir.exists() {
-        return Ok(skills);
+/// Do two paths refer to the same location? Falls back to canonicalization so
+/// relative and absolute spellings compare equal.
+fn same_path(a: &Path, b: &Path) -> bool {
+    if a == b {
+        return true;
     }
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        if path.join("SKILL.md").exists() {
-            skills.push(entry.file_name().to_string_lossy().to_string());
-        }
+    match (fs::canonicalize(a), fs::canonicalize(b)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
     }
-    Ok(skills)
 }
 
-#[tauri::command]
-fn sync_tool(tool_key: String, overwrite: Option<bool>) -> Result<SyncResult, String> {
+/// Create the tool-side skills link. Types are per-platform so Linux dev
+/// builds keep working too.
+fn create_skills_link(source: &Path, target: &Path) -> Result<(), String> {
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(source, target).map_err(|e| e.to_string())
+    }
+    #[cfg(windows)]
+    {
+        std::os::windows::fs::junction(source, target).map_err(|e| e.to_string())
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (source, target);
+        Err("Symlink not supported on this platform".to_string())
+    }
+}
+
+fn sync_tool_in(
+    home: &Path,
+    source: &Path,
+    tool_key: &str,
+    overwrite: bool,
+) -> Result<SyncResult, String> {
     let tool = adapter::all_tools()
         .into_iter()
         .find(|t| t.key == tool_key)
         .ok_or_else(|| format!("Unknown tool: {}", tool_key))?;
-    let overwrite = overwrite.unwrap_or(false);
 
-    let result = |merged: Vec<String>, backed_up: Vec<String>, conflicts: Vec<String>, error: Option<String>| -> Result<SyncResult, String> {
+    let result = |merged: Vec<String>,
+                  backed_up: Vec<String>,
+                  conflicts: Vec<String>,
+                  error: Option<String>|
+     -> Result<SyncResult, String> {
         Ok(SyncResult {
-            key: tool_key.clone(),
+            key: tool_key.to_string(),
             name: tool.name.to_string(),
             success: error.is_none(),
             merged,
@@ -865,12 +1132,7 @@ fn sync_tool(tool_key: String, overwrite: Option<bool>) -> Result<SyncResult, St
     if tool.global_skills == ".agents/skills" {
         return result(vec![], vec![], vec![], None);
     }
-
-    let source = resolve_skills_source()?;
-    let home = dirs::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
-    let target = home.join(tool.global_skills);
-
-    if !source.exists() {
+    if !source.is_dir() {
         return result(
             vec![],
             vec![],
@@ -879,89 +1141,144 @@ fn sync_tool(tool_key: String, overwrite: Option<bool>) -> Result<SyncResult, St
         );
     }
 
-    // Already a symlink pointing to source
-    if target.is_symlink() {
-        if let Ok(link) = std::fs::read_link(&target) {
-            if link == source {
+    let target = home.join(tool.global_skills);
+    let aide_dir = home.join(".aide");
+    let backup_root = aide_dir.join("sync-backup").join(tool_key);
+    let stamp = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let stamp = format!("{stamp}-{:05}", std::process::id());
+
+    // A link that already points at the central store needs no work. A stale
+    // link is removed on its own: unlinking never touches the linked content.
+    if let Ok(meta) = fs::symlink_metadata(&target) {
+        if meta.file_type().is_symlink() {
+            // A relative link is resolved against the link's own directory.
+            let points_here = fs::read_link(&target)
+                .map(|link| {
+                    let resolved = if link.is_absolute() {
+                        link
+                    } else {
+                        target
+                            .parent()
+                            .map(|parent| parent.join(&link))
+                            .unwrap_or(link)
+                    };
+                    same_path(&resolved, source)
+                })
+                .unwrap_or(false);
+            if points_here {
                 return result(vec![], vec![], vec![], None);
             }
+            fs::remove_file(&target)
+                .map_err(|e| format!("Failed to remove stale link {}: {e}", target.display()))?;
         }
-        std::fs::remove_file(&target).map_err(|e| e.to_string())?;
     }
 
     let mut merged = Vec::new();
     let mut backed_up = Vec::new();
     let mut conflicts = Vec::new();
 
-    if target.exists() && !target.is_symlink() {
-        let target_skills = gather_skills(&target).map_err(|e| e.to_string())?;
-        for skill in &target_skills {
-            let src_skill_dir = source.join(skill);
-            let tgt_skill_dir = target.join(skill);
-
-            if !src_skill_dir.exists() {
-                if fs::rename(&tgt_skill_dir, &src_skill_dir).is_ok() {
-                    merged.push(skill.clone());
-                }
-                continue;
-            }
-
-            // Same skill exists on both sides. Either the central copy wins
-            // (explicit overwrite) or the tool-side copy is preserved in a
-            // timestamped backup before the target directory is replaced.
-            if overwrite {
-                conflicts.push(skill.clone());
-                continue;
-            }
-            let ts = SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            let backup_dir = home
-                .join(".aide")
-                .join("sync-backup")
-                .join(&tool_key)
-                .join(format!("{}-{}", skill, ts));
-            if let Some(parent) = backup_dir.parent() {
-                let _ = fs::create_dir_all(parent);
-            }
-            if fs::rename(&tgt_skill_dir, &backup_dir).is_ok() {
-                backed_up.push(skill.clone());
+    let target_is_dir = fs::symlink_metadata(&target)
+        .map(|m| m.is_dir())
+        .unwrap_or(false);
+    if target_is_dir {
+        for skill_path in find_skill_dirs(&target) {
+            let name = match skill_path.file_name() {
+                Some(n) => n.to_string_lossy().to_string(),
+                None => continue,
+            };
+            let central = source.join(&name);
+            if fs::symlink_metadata(&central).is_err() {
+                // Tool-only skill: adopt it into the central store instead of
+                // deleting it with the replaced directory.
+                move_path(&skill_path, &central)
+                    .map_err(|e| format!("Failed to move tool-only skill \"{name}\": {e}"))?;
+                merged.push(name);
             } else {
-                conflicts.push(skill.clone());
+                // Same skill on both sides: the central copy wins, but the
+                // tool-side copy is always preserved in the backup folder.
+                let dest = backup_root.join(format!("{name}-{stamp}"));
+                move_path(&skill_path, &dest)
+                    .map_err(|e| format!("Failed to back up \"{name}\": {e}"))?;
+                backed_up.push(name.clone());
+                if overwrite {
+                    conflicts.push(name);
+                }
             }
         }
-
-        fs::remove_dir_all(&target).map_err(|e| e.to_string())?;
     }
 
-    if let Some(parent) = target.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    if fs::symlink_metadata(&target).is_ok() {
+        // Rename the whole replaced directory (or file) into the backup folder
+        // instead of deleting it, so non-skill content can be recovered by hand.
+        let displaced = backup_root.join(format!("{stamp}-replaced"));
+        fs::create_dir_all(&backup_root)
+            .map_err(|e| format!("create {}: {e}", backup_root.display()))?;
+        fs::rename(&target, &displaced).map_err(|e| {
+            format!(
+                "Failed to move the existing {} aside to {}: {e}",
+                target.display(),
+                displaced.display()
+            )
+        })?;
+
+        if let Err(err) = create_skills_link(source, &target) {
+            // Put the original content back; a failed sync must not lose data.
+            if let Err(restore) = fs::rename(&displaced, &target) {
+                return Err(format!(
+                    "{err}. The previous content is preserved at {} and could not be moved back automatically: {restore}",
+                    displaced.display()
+                ));
+            }
+            return Err(format!("{err} (the previous content was restored)"));
+        }
+    } else {
+        create_skills_link(source, &target)?;
     }
-    #[cfg(target_os = "macos")]
-    std::os::unix::fs::symlink(&source, &target).map_err(|e| e.to_string())?;
-    #[cfg(target_os = "windows")]
-    std::os::windows::fs::junction(&source, &target).map_err(|e| e.to_string())?;
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    return Err("Symlink not supported on this platform".to_string());
 
     result(merged, backed_up, conflicts, None)
 }
 
+#[tauri::command(async)]
+fn sync_tool(tool_key: String, overwrite: Option<bool>) -> Result<SyncResult, String> {
+    let home = dirs::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
+    let source = resolve_skills_source()?;
+    sync_tool_in(&home, &source, &tool_key, overwrite.unwrap_or(false))
+}
+
 /// Core of `sync_all_tools`, shared with the aide-mcp binary.
 pub fn sync_all_skills_to_tools() -> Vec<SyncResult> {
+    let Ok(home) = dirs::home_dir().ok_or_else(|| "Cannot find home directory".to_string()) else {
+        return Vec::new();
+    };
+    let source = match resolve_skills_source() {
+        Ok(dir) => dir,
+        Err(e) => {
+            eprintln!("aide: {e}");
+            return Vec::new();
+        }
+    };
     adapter::all_tools()
         .into_iter()
-        .filter_map(|t| {
-            if t.global_skills == ".agents/skills" {
-                return None;
-            }
-            sync_tool(t.key.to_string(), None).ok()
+        .filter(|t| t.global_skills != ".agents/skills")
+        .map(|t| {
+            let key = t.key.to_string();
+            sync_tool_in(&home, &source, &key, false).unwrap_or_else(|e| SyncResult {
+                key,
+                name: t.name.to_string(),
+                success: false,
+                merged: vec![],
+                backed_up: vec![],
+                conflicts: vec![],
+                error: Some(e),
+            })
         })
         .collect()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn sync_all_tools() -> Vec<SyncResult> {
     sync_all_skills_to_tools()
 }
@@ -1024,16 +1341,19 @@ fn save_mcp_servers(servers: Vec<McpServerView>) -> Result<(), String> {
             .into_iter()
             .map(|s| {
                 let name = s.name;
-                (name, mcp::McpServerConfig {
-                    command: s.command,
-                    args: s.args,
-                    url: s.url,
-                    env: s.env,
-                    headers: s.headers,
-                    disabled: s.disabled,
-                    description: s.description,
-                    targets: s.targets,
-                })
+                (
+                    name,
+                    mcp::McpServerConfig {
+                        command: s.command,
+                        args: s.args,
+                        url: s.url,
+                        env: s.env,
+                        headers: s.headers,
+                        disabled: s.disabled,
+                        description: s.description,
+                        targets: s.targets,
+                    },
+                )
             })
             .collect(),
     };
@@ -1065,7 +1385,7 @@ pub struct McpSyncResult {
     pub message: String,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn sync_mcp_tool(tool_key: String) -> Result<McpSyncResult, String> {
     let adapter = mcp::all_mcp_adapters()
         .into_iter()
@@ -1081,25 +1401,29 @@ fn sync_mcp_tool(tool_key: String) -> Result<McpSyncResult, String> {
     })
 }
 
-#[tauri::command]
-fn sync_mcp_all() -> Vec<McpSyncResult> {
-    let config = mcp::read_central().ok();
-    let config = match config {
-        Some(c) => c,
-        None => return vec![],
-    };
-    mcp::all_mcp_adapters()
+#[tauri::command(async)]
+fn sync_mcp_all() -> Result<Vec<McpSyncResult>, String> {
+    let config = mcp::read_central()?;
+    Ok(mcp::all_mcp_adapters()
         .into_iter()
-        .filter_map(|adapter| {
-            let result = mcp::sync_to_tool(&adapter, &config).ok()?;
-            Some(McpSyncResult {
-                key: adapter.key.to_string(),
-                name: adapter.name.to_string(),
-                skipped: result.skipped,
-                message: result.message,
-            })
+        .map(|adapter| {
+            let result = mcp::sync_to_tool(&adapter, &config);
+            match result {
+                Ok(result) => McpSyncResult {
+                    key: adapter.key.to_string(),
+                    name: adapter.name.to_string(),
+                    skipped: result.skipped,
+                    message: result.message,
+                },
+                Err(err) => McpSyncResult {
+                    key: adapter.key.to_string(),
+                    name: adapter.name.to_string(),
+                    skipped: true,
+                    message: format!("Failed: {err}"),
+                },
+            }
         })
-        .collect()
+        .collect())
 }
 
 #[derive(Serialize)]
@@ -1107,14 +1431,13 @@ pub struct ImportResult {
     pub source: String,
     pub imported: Vec<String>,
     pub skipped: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
-#[tauri::command]
-fn import_mcp_all() -> Vec<ImportResult> {
-    let mut central = match mcp::read_central() {
-        Ok(c) => c,
-        Err(_) => return vec![],
-    };
+#[tauri::command(async)]
+fn import_mcp_all() -> Result<Vec<ImportResult>, String> {
+    let mut central = mcp::read_central()?;
     let mut results = Vec::new();
     for adapter in mcp::all_mcp_adapters() {
         match mcp::import_from_adapter(&adapter, &mut central) {
@@ -1124,20 +1447,74 @@ fn import_mcp_all() -> Vec<ImportResult> {
                         source: result.source,
                         imported: result.imported,
                         skipped: result.skipped,
+                        error: None,
                     });
                 }
             }
-            Err(_e) => {
-                results.push(ImportResult {
-                    source: adapter.name.to_string(),
-                    imported: vec![],
-                    skipped: vec![],
-                });
-            }
+            Err(err) => results.push(ImportResult {
+                source: adapter.name.to_string(),
+                imported: vec![],
+                skipped: vec![],
+                error: Some(err),
+            }),
         }
     }
-    let _ = mcp::save_central(&central);
-    results
+    // save_central is atomic and backs up the previous revision; propagate its
+    // failure instead of leaving the UI with a silently unsaved import.
+    mcp::save_central(&central)?;
+    Ok(results)
+}
+
+#[derive(Serialize)]
+pub struct McpDrift {
+    pub tool_key: String,
+    pub tool_name: String,
+    pub missing: Vec<String>,
+    pub leftover: Vec<String>,
+}
+
+/// Compare every installed tool config against the central config and the
+/// managed manifest. Only adapters with actual differences are reported.
+pub fn mcp_drift() -> Result<Vec<McpDrift>, String> {
+    let central = mcp::read_central()?;
+    let managed = mcp::read_managed()?;
+    let mut drifts = Vec::new();
+    for adapter in mcp::all_mcp_adapters() {
+        let config_path = adapter.resolve_path()?;
+        if let Some(drift) = mcp::compute_drift(&adapter, &config_path, &central, &managed)? {
+            drifts.push(McpDrift {
+                tool_key: adapter.key.to_string(),
+                tool_name: adapter.name.to_string(),
+                missing: drift.missing,
+                leftover: drift.leftover,
+            });
+        }
+    }
+    Ok(drifts)
+}
+
+#[tauri::command(async)]
+fn get_mcp_drift() -> Result<Vec<McpDrift>, String> {
+    mcp_drift()
+}
+
+#[tauri::command(async)]
+fn cleanup_mcp_drift() -> Result<Vec<McpSyncResult>, String> {
+    let config = mcp::read_central()?;
+    mcp::all_mcp_adapters()
+        .into_iter()
+        .map(|adapter| {
+            // Unlike `sync_mcp_all`, config read errors propagate: cleanup must
+            // not report success while a corrupt tool config was left behind.
+            let result = mcp::sync_to_tool(&adapter, &config)?;
+            Ok(McpSyncResult {
+                key: adapter.key.to_string(),
+                name: adapter.name.to_string(),
+                skipped: result.skipped,
+                message: result.message,
+            })
+        })
+        .collect()
 }
 
 #[tauri::command]
@@ -1163,6 +1540,8 @@ pub fn run() {
             sync_mcp_tool,
             sync_mcp_all,
             import_mcp_all,
+            get_mcp_drift,
+            cleanup_mcp_drift,
             check_sync_statuses,
             check_skill_updates,
             update_skill,
@@ -1207,7 +1586,8 @@ mod tests {
 
     #[test]
     fn parse_frontmatter_reads_name_description_and_tags() {
-        let md = "---\nname: my-skill\ndescription: Does things\ntags: [\"a\", \"b\"]\n---\n\n# Body\n";
+        let md =
+            "---\nname: my-skill\ndescription: Does things\ntags: [\"a\", \"b\"]\n---\n\n# Body\n";
         let (name, desc, tags) = parse_skill_frontmatter(md);
         assert_eq!(name.as_deref(), Some("my-skill"));
         assert_eq!(desc.as_deref(), Some("Does things"));
@@ -1237,70 +1617,245 @@ mod tests {
     }
 
     fn write_temp_skill(name: &str, content: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "aide-tags-test-{}-{}",
-            name,
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("aide-tags-test-{}-{}", name, std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("SKILL.md"), content).unwrap();
         dir
     }
 
+    fn temp_home(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("aide-lib-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn read_tags(dir: &Path) -> Vec<String> {
+        let content = fs::read_to_string(dir.join("SKILL.md")).unwrap();
+        parse_skill_frontmatter(&content).2
+    }
+
     #[test]
     fn update_skill_tags_replaces_top_level_tags() {
-        let dir = write_temp_skill(
-            "replace",
-            "---\nname: s\ntags: [\"old\"]\n---\nBody",
-        );
-        update_skill_tags(dir.to_string_lossy().to_string(), vec!["new".into()]).unwrap();
+        let home = temp_home("tags-replace");
+        let dir = write_temp_skill("replace", "---\nname: s\ntags: [\"old\"]\n---\nBody\n");
+        update_skill_tags_in(&home, &dir, &["new".to_string()]).unwrap();
+        assert_eq!(read_tags(&dir), vec!["new".to_string()]);
         let content = fs::read_to_string(dir.join("SKILL.md")).unwrap();
-        assert!(content.contains("tags: [\"new\"]"));
         assert!(!content.contains("old"));
-        assert!(content.ends_with("Body"));
+        assert!(content.ends_with("Body\n"));
         let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn update_skill_tags_appends_when_missing() {
+        let home = temp_home("tags-append");
         let dir = write_temp_skill("append", "---\nname: s\n---\nBody");
-        update_skill_tags(dir.to_string_lossy().to_string(), vec!["a".into(), "b".into()]).unwrap();
+        update_skill_tags_in(&home, &dir, &["a".to_string(), "b".to_string()]).unwrap();
+        assert_eq!(read_tags(&dir), vec!["a".to_string(), "b".to_string()]);
         let content = fs::read_to_string(dir.join("SKILL.md")).unwrap();
-        assert!(content.contains("tags: [\"a\", \"b\"]"));
+        assert!(content.ends_with("Body"));
         let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn update_skill_tags_syncs_metadata_tags_copy() {
+        let home = temp_home("tags-metadata");
         let dir = write_temp_skill(
             "metadata",
             "---\nname: s\nmetadata:\n  tags: [\"old\"]\n  other: keep\n---\nBody",
         );
-        update_skill_tags(dir.to_string_lossy().to_string(), vec!["fresh".into()]).unwrap();
+        update_skill_tags_in(&home, &dir, &["fresh".to_string()]).unwrap();
         let content = fs::read_to_string(dir.join("SKILL.md")).unwrap();
-        assert!(content.contains("tags: [\"fresh\"]"));
+        assert_eq!(read_tags(&dir), vec!["fresh".to_string()]);
         assert!(!content.contains("old"));
         assert!(content.contains("other: keep"));
+        assert!(!content.contains("  tags:"));
         let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn update_skill_tags_clears_existing_tags() {
+        let home = temp_home("tags-clear");
         let dir = write_temp_skill("clear", "---\nname: s\ntags: [\"old\"]\n---\nBody");
-        update_skill_tags(dir.to_string_lossy().to_string(), vec![]).unwrap();
+        update_skill_tags_in(&home, &dir, &[]).unwrap();
         let content = fs::read_to_string(dir.join("SKILL.md")).unwrap();
         assert!(!content.contains("tags:"));
         assert!(content.contains("name: s"));
+        assert!(content.ends_with("Body"));
         let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
+    fn update_skill_tags_handles_block_list_and_quoted_tags() {
+        let home = temp_home("tags-block");
+        let dir = write_temp_skill(
+            "block",
+            "---\nname: s\ntags:\n  - old-one\n  - \"old two\"\ndescription: keep me\n---\nBody\n",
+        );
+        update_skill_tags_in(
+            &home,
+            &dir,
+            &["alpha".to_string(), "beta gamma".to_string()],
+        )
+        .unwrap();
+        let content = fs::read_to_string(dir.join("SKILL.md")).unwrap();
+        assert_eq!(
+            read_tags(&dir),
+            vec!["alpha".to_string(), "beta gamma".to_string()]
+        );
+        assert!(!content.contains("old-one"));
+        assert!(!content.contains("old two"));
+        assert!(content.contains("description: keep me"));
+        let (name, desc, _) = parse_skill_frontmatter(&content);
+        assert_eq!(name.as_deref(), Some("s"));
+        assert_eq!(desc.as_deref(), Some("keep me"));
+        // The backup of the previous revision is kept.
+        assert!(home.join(".aide").join("backups").is_dir());
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn update_skill_tags_refuses_broken_frontmatter() {
+        let home = temp_home("tags-broken");
+        let original = "---\nname: s\ntags: [unclosed\n---\nBody";
+        let dir = write_temp_skill("broken", original);
+        assert!(update_skill_tags_in(&home, &dir, &["a".to_string()]).is_err());
+        // The file is left untouched, not rewritten or truncated.
+        assert_eq!(fs::read_to_string(dir.join("SKILL.md")).unwrap(), original);
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn create_file_refuses_existing_path() {
+        let base = temp_home("create-file");
+        let path = base.join("note.md");
+        create_file(path.to_string_lossy().to_string()).unwrap();
+        let err = create_file(path.to_string_lossy().to_string()).unwrap_err();
+        assert!(err.contains("already exists"));
+        assert!(fs::metadata(&path).unwrap().is_file());
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn create_directory_refuses_path_that_is_a_file() {
+        let base = temp_home("create-dir");
+        let path = base.join("blocker");
+        fs::write(&path, "data").unwrap();
+        let err = create_directory(path.to_string_lossy().to_string()).unwrap_err();
+        assert!(err.contains("file already exists"));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "data");
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn rename_entry_refuses_to_overwrite_destination() {
+        let base = temp_home("rename");
+        let old = base.join("old.md");
+        let new = base.join("new.md");
+        fs::write(&old, "old").unwrap();
+        fs::write(&new, "keep").unwrap();
+        assert!(rename_entry(
+            old.to_string_lossy().to_string(),
+            new.to_string_lossy().to_string()
+        )
+        .is_err());
+        assert_eq!(fs::read_to_string(&old).unwrap(), "old");
+        assert_eq!(fs::read_to_string(&new).unwrap(), "keep");
+        // A free destination still works.
+        let moved = base.join("moved.md");
+        rename_entry(
+            old.to_string_lossy().to_string(),
+            moved.to_string_lossy().to_string(),
+        )
+        .unwrap();
+        assert!(moved.is_file());
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sync_tool_backs_up_conflicts_and_adopts_tool_only_skills() {
+        let home = temp_home("sync-tool");
+        let central = home.join(".agents").join("skills");
+        fs::create_dir_all(central.join("shared")).unwrap();
+        fs::write(central.join("shared").join("SKILL.md"), "central").unwrap();
+        fs::create_dir_all(central.join("central-only")).unwrap();
+        fs::write(central.join("central-only").join("SKILL.md"), "central").unwrap();
+
+        let target = home.join(".claude/skills");
+        fs::create_dir_all(target.join("tool-only")).unwrap();
+        fs::write(target.join("tool-only").join("SKILL.md"), "from tool").unwrap();
+        fs::create_dir_all(target.join("shared")).unwrap();
+        fs::write(target.join("shared").join("SKILL.md"), "tool copy").unwrap();
+        fs::write(target.join("README.md"), "keep me reachable").unwrap();
+
+        let result = sync_tool_in(&home, &central, "claude_code", false).unwrap();
+        assert!(result.success);
+        assert_eq!(result.merged, vec!["tool-only".to_string()]);
+        assert_eq!(result.backed_up, vec!["shared".to_string()]);
+        // Link now points at the central store.
+        let link = fs::read_link(&target).unwrap();
+        assert_eq!(link, central);
+        // Tool-only skill was adopted, central copy of the conflict won.
+        assert!(central.join("tool-only").join("SKILL.md").is_file());
+        assert_eq!(
+            fs::read_to_string(central.join("shared").join("SKILL.md")).unwrap(),
+            "central"
+        );
+        // The replaced directory keeps the non-skill files.
+        let backup_root = home.join(".aide/sync-backup/claude_code");
+        let replaced: Vec<_> = fs::read_dir(&backup_root)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.to_string_lossy().ends_with("-replaced"))
+            .collect();
+        assert_eq!(replaced.len(), 1);
+        assert!(replaced[0].join("README.md").is_file());
+        let backed_up: Vec<_> = fs::read_dir(&backup_root)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.to_string_lossy().contains("/shared-"))
+            .collect();
+        assert_eq!(backed_up.len(), 1);
+        assert_eq!(
+            fs::read_to_string(backed_up[0].join("SKILL.md")).unwrap(),
+            "tool copy"
+        );
+
+        // A second sync is a no-op because the link already points at central.
+        let again = sync_tool_in(&home, &central, "claude_code", false).unwrap();
+        assert!(again.success);
+        assert!(again.merged.is_empty() && again.backed_up.is_empty());
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn symlink_targets_inside_skills_are_not_followed_by_count_files() {
+        #[cfg(unix)]
+        {
+            let base = temp_home("count-symlink");
+            let outside = base.join("outside");
+            fs::create_dir_all(&outside).unwrap();
+            fs::write(outside.join("big.md"), "x").unwrap();
+            let skill = base.join("skill");
+            fs::create_dir_all(&skill).unwrap();
+            fs::write(skill.join("SKILL.md"), "x").unwrap();
+            std::os::unix::fs::symlink(&outside, skill.join("link")).unwrap();
+            assert_eq!(count_files(&skill), 1);
+            let _ = fs::remove_dir_all(&base);
+        }
+    }
+
+    #[test]
     fn count_files_counts_recursively_and_skips_ignored_dirs() {
-        let dir = std::env::temp_dir().join(format!(
-            "aide-count-test-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("aide-count-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(dir.join("refs")).unwrap();
         fs::create_dir_all(dir.join("node_modules/pkg")).unwrap();
@@ -1326,7 +1881,11 @@ mod tests {
         let imported = import_skill_into(&src, &skills_dir).unwrap();
         assert_eq!(imported, "my-skill");
         assert!(skills_dir.join("my-skill").join("SKILL.md").is_file());
-        assert!(skills_dir.join("my-skill").join("refs").join("a.md").is_file());
+        assert!(skills_dir
+            .join("my-skill")
+            .join("refs")
+            .join("a.md")
+            .is_file());
         assert!(!skills_dir.join("my-skill").join("node_modules").exists());
 
         let duplicate = import_skill_into(&src, &skills_dir);
@@ -1336,7 +1895,8 @@ mod tests {
 
     #[test]
     fn import_skill_rejects_non_directory() {
-        let base = std::env::temp_dir().join(format!("aide-import-neg-test-{}", std::process::id()));
+        let base =
+            std::env::temp_dir().join(format!("aide-import-neg-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         fs::create_dir_all(&base).unwrap();
         let file = base.join("plain.txt");
@@ -1359,7 +1919,11 @@ mod tests {
         )
         .unwrap();
         fs::write(alpha.join("notes.md"), "nothing here").unwrap();
-        fs::write(beta.join("SKILL.md"), "---\nname: beta\n---\nZebra habitat facts").unwrap();
+        fs::write(
+            beta.join("SKILL.md"),
+            "---\nname: beta\n---\nZebra habitat facts",
+        )
+        .unwrap();
 
         let matches = search_skills_in(&base, "zebra");
         assert_eq!(matches.len(), 2);
@@ -1373,6 +1937,72 @@ mod tests {
         assert!(empty.is_empty());
         let none = search_skills_in(&base, "unicorn");
         assert!(none.is_empty());
+        let _ = fs::remove_dir_all(&base);
+    }
+    #[test]
+    fn split_frontmatter_ignores_horizontal_rules_in_body() {
+        let doc = "---\nname: s\n---\nintro\n\n---\n\nafter";
+        let (yaml, body) = split_frontmatter(doc).unwrap();
+        assert!(yaml.contains("name: s"));
+        assert!(body.starts_with("intro"));
+        assert!(body.contains("---"));
+        assert!(split_frontmatter("# no frontmatter").is_none());
+    }
+
+    #[test]
+    fn update_skill_tags_creates_frontmatter_when_absent() {
+        let home = temp_home("tags-create");
+        let dir = write_temp_skill("create", "# Just a body\n");
+        update_skill_tags_in(&home, &dir, &["one".to_string()]).unwrap();
+        let content = fs::read_to_string(dir.join("SKILL.md")).unwrap();
+        assert!(content.starts_with("---\n"));
+        assert!(content.ends_with("# Just a body\n"));
+        assert_eq!(read_tags(&dir), vec!["one".to_string()]);
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sync_tool_overwrite_also_backs_up_tool_side_copy() {
+        let home = temp_home("sync-overwrite");
+        let central = home.join(".agents").join("skills");
+        fs::create_dir_all(central.join("both")).unwrap();
+        fs::write(central.join("both").join("SKILL.md"), "central").unwrap();
+        let target = home.join(".claude/skills");
+        fs::create_dir_all(target.join("both")).unwrap();
+        fs::write(target.join("both").join("SKILL.md"), "tool copy").unwrap();
+
+        let result = sync_tool_in(&home, &central, "claude_code", true).unwrap();
+        assert!(result.success);
+        // Even with overwrite the tool-side copy survives in the backup folder.
+        assert_eq!(result.backed_up, vec!["both".to_string()]);
+        assert_eq!(result.conflicts, vec!["both".to_string()]);
+        assert_eq!(
+            fs::read_to_string(central.join("both").join("SKILL.md")).unwrap(),
+            "central"
+        );
+        let backup_root = home.join(".aide/sync-backup/claude_code");
+        let backed_up: Vec<_> = fs::read_dir(&backup_root)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.to_string_lossy().contains("/both-"))
+            .collect();
+        assert_eq!(backed_up.len(), 1);
+        assert_eq!(
+            fs::read_to_string(backed_up[0].join("SKILL.md")).unwrap(),
+            "tool copy"
+        );
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn delete_entry_errors_instead_of_deleting_permanently() {
+        let base = temp_home("delete-missing");
+        let missing = base.join("nope.md");
+        let err = delete_entry(missing.to_string_lossy().to_string()).unwrap_err();
+        assert!(err.contains("trash"), "unexpected error: {err}");
         let _ = fs::remove_dir_all(&base);
     }
 }
