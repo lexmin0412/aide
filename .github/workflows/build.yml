@@ -34,7 +34,12 @@ jobs:
           node-version: 22
           cache: pnpm
 
+      # The action defaults RUSTFLAGS to `-D warnings`, which also applies to
+      # dependencies and has broken Windows builds before; keep it empty here
+      # because this workflow only produces artifacts (CI enforces lints).
       - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ''
 
       - name: Install Linux system dependencies
         if: matrix.os == 'ubuntu-22.04'

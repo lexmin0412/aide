@@ -59,6 +59,9 @@ jobs:
         with:
           components: rustfmt, clippy
           cache-workspaces: src-tauri -> target
+          # Lints are enforced explicitly by the clippy step below; the action's
+          # default `-D warnings` would also apply to dependency build scripts.
+          rustflags: ''
 
       # tauri-build validates bundle.externalBin resources even for lib/test
       # builds. The real sidecar is produced by the release workflow, so CI only
