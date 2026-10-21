@@ -132,17 +132,22 @@ export default function App() {
     setGridKey((k) => k + 1)
   }, [])
 
-  // Global shortcuts: Cmd+K opens the skill search palette.
+  // Global shortcuts: Cmd+K opens the skill search palette. It must not stack a
+  // second palette on top of an already-open modal dialog.
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
-        e.preventDefault()
-        setPaletteOpen((prev) => !prev)
+      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "k") return
+      e.preventDefault()
+      if (paletteOpen) {
+        setPaletteOpen(false)
+        return
       }
+      if (document.querySelector('[data-slot="dialog-content"]')) return
+      setPaletteOpen(true)
     }
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [])
+  }, [paletteOpen])
 
   // Silent update check shortly after launch; opens the dialog only when an
   // update exists. Failures are ignored (manual check stays available).

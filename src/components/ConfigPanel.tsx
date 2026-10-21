@@ -186,6 +186,7 @@ export function ConfigPanel({ active = true, registerLeaveGuard }: ConfigPanelPr
                       onDirtyChange={handleDirtyChange}
                       onSave={handleSave}
                       registerDocSource={registerDocSource}
+                      onOpenFile={openFile}
                     />
                   </Suspense>
                 ) : (

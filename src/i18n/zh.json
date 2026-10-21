@@ -358,7 +358,9 @@
     "edit": "编辑",
     "preview": "预览",
     "saveFailed": "保存文件失败：{{error}}",
-    "openFailed": "打开文件失败：{{error}}"
+    "openFailed": "打开文件失败：{{error}}",
+    "linkMissing": "链接的文件不存在：{{path}}",
+    "openLinkFailed": "打开链接失败：{{error}}"
   },
   "theme": {
     "system": "跟随系统",

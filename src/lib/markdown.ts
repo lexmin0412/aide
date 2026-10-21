@@ -9,10 +9,35 @@ function escapeHtml(s: string): string {
     .replace(/"/g, "&quot;")
 }
 
-function renderInline(text: string): string {
+function unescapeHtml(s: string): string {
+  return s
+    .replace(/&quot;/g, '"')
+    .replace(/&gt;/g, ">")
+    .replace(/&lt;/g, "<")
+    .replace(/&amp;/g, "&")
+}
+
+export interface RenderMarkdownOptions {
+  /**
+   * Rewrite an `<img src>` before it is emitted (the preview uses it to turn
+   * relative file paths into Tauri asset URLs). Remote/anchor sources are left
+   * untouched by the caller.
+   */
+  resolveImageSrc?: (src: string) => string
+}
+
+function renderImage(alt: string, escapedSrc: string, options?: RenderMarkdownOptions): string {
+  const rawSrc = unescapeHtml(escapedSrc)
+  const resolved = options?.resolveImageSrc?.(rawSrc) ?? rawSrc
+  return `<img alt="${alt}" src="${escapeHtml(resolved)}" />`
+}
+
+function renderInline(text: string, options?: RenderMarkdownOptions): string {
   let out = escapeHtml(text)
   out = out.replace(/`([^`]+)`/g, "<code>$1</code>")
-  out = out.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, '<img alt="$1" src="$2" />')
+  out = out.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (_match, alt: string, src: string) =>
+    renderImage(alt, src, options)
+  )
   out = out.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<a href="$2" rel="noopener noreferrer">$1</a>')
   out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
   out = out.replace(/(^|[^*])\*([^*\s][^*]*)\*/g, "$1<em>$2</em>")
@@ -55,7 +80,12 @@ function isTableStart(lines: string[], index: number): boolean {
   return splitTableRow(header).length === splitTableRow(delimiter).length
 }
 
-function renderTable(headerRow: string, delimiterRow: string, bodyRows: string[]): string {
+function renderTable(
+  headerRow: string,
+  delimiterRow: string,
+  bodyRows: string[],
+  options?: RenderMarkdownOptions
+): string {
   const header = splitTableRow(headerRow)
   const alignments = splitTableRow(delimiterRow).map((spec) => {
     const left = spec.startsWith(":")
@@ -68,7 +98,7 @@ function renderTable(headerRow: string, delimiterRow: string, bodyRows: string[]
   const cell = (tag: "th" | "td", text: string, index: number) => {
     const align = alignments[index]
     const attr = align ? ` style="text-align: ${align}"` : ""
-    return `<${tag}${attr}>${renderInline(text)}</${tag}>`
+    return `<${tag}${attr}>${renderInline(text, options)}</${tag}>`
   }
   const head = `<thead><tr>${header.map((text, idx) => cell("th", text, idx)).join("")}</tr></thead>`
   const body = bodyRows.length
@@ -92,7 +122,7 @@ export function stripFrontmatter(content: string): string {
   return rest.slice(end + 3).trim()
 }
 
-export function renderMarkdown(content: string): string {
+export function renderMarkdown(content: string, options: RenderMarkdownOptions = {}): string {
   const source = stripFrontmatter(content)
   const lines = source.split("\n")
   const out: string[] = []
@@ -128,7 +158,7 @@ export function renderMarkdown(content: string): string {
     if (heading) {
       closeList(listStack)
       const level = heading[1].length
-      out.push(`<h${level}>${renderInline(heading[2])}</h${level}>`)
+      out.push(`<h${level}>${renderInline(heading[2], options)}</h${level}>`)
       i++
       continue
     }
@@ -149,7 +179,7 @@ export function renderMarkdown(content: string): string {
         body.push(lines[i].trimStart().replace(/^>\s?/, ""))
         i++
       }
-      out.push(`<blockquote>${renderMarkdown(body.join("\n"))}</blockquote>`)
+      out.push(`<blockquote>${renderMarkdown(body.join("\n"), options)}</blockquote>`)
       continue
     }
 
@@ -160,7 +190,7 @@ export function renderMarkdown(content: string): string {
         out.push("<ul>")
         listStack.push("ul")
       }
-      out.push(`<li>${renderInline(line.replace(/^\s*[-*+]\s+/, ""))}</li>`)
+      out.push(`<li>${renderInline(line.replace(/^\s*[-*+]\s+/, ""), options)}</li>`)
       i++
       continue
     }
@@ -172,7 +202,7 @@ export function renderMarkdown(content: string): string {
         out.push("<ol>")
         listStack.push("ol")
       }
-      out.push(`<li>${renderInline(line.replace(/^\s*\d+\.\s+/, ""))}</li>`)
+      out.push(`<li>${renderInline(line.replace(/^\s*\d+\.\s+/, ""), options)}</li>`)
       i++
       continue
     }
@@ -194,7 +224,7 @@ export function renderMarkdown(content: string): string {
         body.push(lines[i])
         i++
       }
-      out.push(renderTable(header, delimiter, body))
+      out.push(renderTable(header, delimiter, body, options))
       continue
     }
 
@@ -219,7 +249,7 @@ export function renderMarkdown(content: string): string {
       para.push(lines[i])
       i++
     }
-    out.push(`<p>${renderInline(para.join("\n")).replace(/\n/g, "<br />")}</p>`)
+    out.push(`<p>${renderInline(para.join("\n"), options).replace(/\n/g, "<br />")}</p>`)
   }
 
   closeList(listStack)

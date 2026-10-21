@@ -358,7 +358,9 @@
     "edit": "Edit",
     "preview": "Preview",
     "saveFailed": "Failed to save file: {{error}}",
-    "openFailed": "Failed to open file: {{error}}"
+    "openFailed": "Failed to open file: {{error}}",
+    "linkMissing": "Linked file not found: {{path}}",
+    "openLinkFailed": "Failed to open link: {{error}}"
   },
   "theme": {
     "system": "system",

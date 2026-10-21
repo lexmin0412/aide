@@ -1,4 +1,6 @@
 import { useEffect, useRef, useMemo, useState } from "react"
+import { convertFileSrc, invoke } from "@tauri-apps/api/core"
+import { openUrl } from "@tauri-apps/plugin-opener"
 import { EditorView, keymap } from "@codemirror/view"
 import { EditorState, Compartment, type Extension } from "@codemirror/state"
 import { basicSetup } from "codemirror"
@@ -11,6 +13,8 @@ import { languages } from "@codemirror/language-data"
 import { Eye, Code } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { renderMarkdown } from "@/lib/markdown"
+import { classifyHref, dirOf, resolveImagePath, resolveRelativePath } from "@/lib/markdownPaths"
+import { toast } from "@/lib/toast"
 import { getCachedState, getLatestStateForPath, setCachedState, stateCacheKey } from "@/lib/editorStateCache"
 import type { DocReader } from "@/hooks/useTabs"
 import type { EditorTab } from "../types"
@@ -23,6 +27,8 @@ interface EditorProps {
   onSave: (path: string) => void
   /** Registers a live-document reader so the tab cache can be flushed/saved. */
   registerDocSource: (path: string, reader: DocReader | null) => void
+  /** Opens a local file referenced from the markdown preview in another tab. */
+  onOpenFile?: (path: string) => void
 }
 
 // Language support is swapped in through this compartment so lazily-imported
@@ -110,17 +116,84 @@ function ImageViewer({ tab }: { tab: EditorTab }) {
   )
 }
 
-function MarkdownPreview({ content }: { content: string }) {
-  const html = useMemo(() => renderMarkdown(content), [content])
+function MarkdownPreview({
+  content,
+  filePath,
+  onOpenFile,
+}: {
+  content: string
+  filePath: string
+  onOpenFile?: (path: string) => void
+}) {
+  const { t } = useTranslation()
+  const containerRef = useRef<HTMLDivElement>(null)
+  const baseDir = useMemo(() => dirOf(filePath), [filePath])
+  // Relative images are resolved against the rendered file and served through
+  // the Tauri asset protocol; remote/anchor sources stay untouched.
+  const html = useMemo(
+    () =>
+      renderMarkdown(content, {
+        resolveImageSrc: (src) => {
+          const absolute = resolveImagePath(src, baseDir)
+          return absolute ? convertFileSrc(absolute) : src
+        },
+      }),
+    [content, baseDir]
+  )
+
+  // Anchor clicks are handled with a DOM listener instead of a JSX onClick so
+  // the preview container does not need a fake interactive role.
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+
+    const openLinkedFile = async (absolute: string) => {
+      try {
+        const exists = await invoke<boolean>("file_exists", { path: absolute })
+        if (!exists) {
+          toast(t("editor.linkMissing", { path: absolute }), "error")
+          return
+        }
+        onOpenFile?.(absolute)
+      } catch (error) {
+        toast(t("editor.openLinkFailed", { error: String(error) }), "error")
+      }
+    }
+
+    const onClick = (event: MouseEvent) => {
+      if (!(event.target instanceof Element)) return
+      const anchor = event.target.closest("a")
+      if (!anchor) return
+      const href = anchor.getAttribute("href")
+      if (!href) return
+      const kind = classifyHref(href)
+      if (kind === "anchor" || kind === "empty") return
+      // Never let the webview navigate away from the app.
+      event.preventDefault()
+      if (kind === "external" || kind === "email") {
+        void openUrl(href).catch((error: unknown) => {
+          toast(t("editor.openLinkFailed", { error: String(error) }), "error")
+        })
+        return
+      }
+      if (kind === "unsupported") return
+      void openLinkedFile(resolveRelativePath(baseDir, href))
+    }
+
+    el.addEventListener("click", onClick)
+    return () => el.removeEventListener("click", onClick)
+  }, [baseDir, onOpenFile, t])
+
   return (
     <div
+      ref={containerRef}
       className="h-full overflow-y-auto px-8 py-6 text-sm leading-relaxed markdown-preview"
       dangerouslySetInnerHTML={{ __html: html }}
     />
   )
 }
 
-function TextViewer({ tab, onDirtyChange, onSave, registerDocSource }: EditorProps) {
+function TextViewer({ tab, onDirtyChange, onSave, registerDocSource, onOpenFile }: EditorProps) {
   const editorRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
   const onDirtyChangeRef = useRef(onDirtyChange)
@@ -320,7 +393,9 @@ function TextViewer({ tab, onDirtyChange, onSave, registerDocSource }: EditorPro
           </button>
         </div>
       )}
-      {isMarkdown && preview ? <MarkdownPreview content={previewContent} /> : null}
+      {isMarkdown && preview ? (
+        <MarkdownPreview content={previewContent} filePath={tab.path} onOpenFile={onOpenFile} />
+      ) : null}
       <div
         className={`editor-content flex-1 min-h-0 ${isMarkdown && preview ? "hidden" : ""}`}
         ref={editorRef}
@@ -329,10 +404,16 @@ function TextViewer({ tab, onDirtyChange, onSave, registerDocSource }: EditorPro
   )
 }
 
-export function Editor({ tab, onDirtyChange, onSave, registerDocSource }: EditorProps) {
+export function Editor({ tab, onDirtyChange, onSave, registerDocSource, onOpenFile }: EditorProps) {
   if (tab.is_image) return <ImageViewer tab={tab} />
   return (
-    <TextViewer tab={tab} onDirtyChange={onDirtyChange} onSave={onSave} registerDocSource={registerDocSource} />
+    <TextViewer
+      tab={tab}
+      onDirtyChange={onDirtyChange}
+      onSave={onSave}
+      registerDocSource={registerDocSource}
+      onOpenFile={onOpenFile}
+    />
   )
 }
 

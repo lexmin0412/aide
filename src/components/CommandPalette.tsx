@@ -143,7 +143,14 @@ export function CommandPalette({ open, onClose, onSelectSkill, onSelectFileMatch
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose() }}>
-      <DialogContent className="sm:max-w-[520px] top-[20%] translate-y-0" showCloseButton={false}>
+      <DialogContent
+        className="sm:max-w-[520px] top-[20%] translate-y-0"
+        showCloseButton={false}
+        onEscapeKeyDown={(event) => {
+          event.preventDefault()
+          onClose()
+        }}
+      >
         <DialogHeader className="sr-only">
           <DialogTitle>{t("palette.title")}</DialogTitle>
         </DialogHeader>

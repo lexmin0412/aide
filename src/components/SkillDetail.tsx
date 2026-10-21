@@ -190,6 +190,7 @@ export default function SkillDetail({ skill, initialFile, onBack, onDelete, acti
                   onDirtyChange={handleDirtyChange}
                   onSave={handleSave}
                   registerDocSource={registerDocSource}
+                  onOpenFile={openFile}
                 />
               </Suspense>
             ) : (
