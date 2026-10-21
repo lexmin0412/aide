@@ -1,6 +1,6 @@
 [package]
 name = "aide-core"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "Headless domain logic for aide: skills, tool sync, MCP, models, git scopes"
 authors = ["you"]
