@@ -429,5 +429,56 @@
       "driftCleaned": "已更新 {{updated}} 个工具配置，{{skipped}} 个跳过",
       "modelsSynced": "已同步 {{count}} 个模型目标"
     }
+  },
+  "project": {
+    "title": "项目配置",
+    "desc": "将选中的技能与 MCP 服务器链接到项目目录，并写入所需的工具配置。",
+    "emptyTitle": "尚未选择项目",
+    "emptyDesc": "打开一个项目目录，把技能与 MCP 服务器链接进去；只会写入已选择的内容。",
+    "openFolder": "打开项目目录",
+    "pickFolderTitle": "选择项目目录",
+    "changeFolder": "更换目录",
+    "configured": "已配置项目档案",
+    "notConfigured": "尚未保存档案，已预选默认值",
+    "selected": "已选 {{count}} 个",
+    "missing": "缺失",
+    "loadFailed": "加载项目状态失败：{{error}}",
+    "status": {
+      "linked": "已链接 {{count}} 个技能"
+    },
+    "skills": {
+      "title": "技能",
+      "search": "过滤技能...",
+      "empty": "还没有安装技能",
+      "noMatch": "没有匹配的技能"
+    },
+    "mcp": {
+      "title": "MCP 服务器",
+      "empty": "还没有配置 MCP 服务器"
+    },
+    "tools": {
+      "title": "工具",
+      "empty": "没有支持项目级技能目录的工具",
+      "detected": "已检测到",
+      "alwaysManaged": "使用 .agents/skills 的工具始终由 aide 管理。"
+    },
+    "warningsTitle": "警告",
+    "sync": {
+      "title": "上次应用",
+      "summary": "已链接 {{linked}} 个技能、移除 {{removed}} 个、写入 {{tools}} 个工具配置"
+    },
+    "actions": {
+      "save": "保存并应用",
+      "saving": "应用中...",
+      "clear": "清除配置",
+      "clearing": "清除中...",
+      "clearConfirm": "清除该项目配置？已管理的技能链接与 MCP 条目会被移除，项目目录仍保持连接。",
+      "confirmClear": "确认清除"
+    },
+    "toast": {
+      "saved": "项目配置已应用：{{linked}} 个技能链接、{{tools}} 个工具配置",
+      "cleared": "项目配置已清除：移除 {{removed}} 个技能链接",
+      "failed": "应用项目配置失败：{{error}}"
+    }
   }
 }

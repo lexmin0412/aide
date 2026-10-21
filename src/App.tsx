@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from "react"
 import { invoke } from "@tauri-apps/api/core"
 import { check, Update } from "@tauri-apps/plugin-updater"
+import { FolderGit2 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { getLanguage, setLanguage, type Language } from "@/i18n"
 import SkillGrid from "./components/SkillGrid"
@@ -8,6 +9,7 @@ import SkillDetail from "./components/SkillDetail"
 import { ConfigPanel } from "./components/ConfigPanel"
 import MCPPage from "./components/MCPPage"
 import ModelPage from "./components/ModelPage"
+import { ProjectDialog } from "./components/ProjectDialog"
 import HealthPage from "./components/HealthPage"
 import { UpdateDialog } from "./components/UpdateDialog"
 import { CommandPalette } from "./components/CommandPalette"
@@ -93,6 +95,7 @@ export default function App() {
   const [gridKey, setGridKey] = useState(0)
   const [showUpdate, setShowUpdate] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
+  const [projectOpen, setProjectOpen] = useState(false)
   // Pages are mounted on first visit only: startup no longer fires every page's
   // invokes, while revisits keep their state (they stay mounted but hidden).
   const [visitedPages, setVisitedPages] = useState<Set<Page>>(() => new Set<Page>(["skills"]))
@@ -245,6 +248,14 @@ export default function App() {
         <ThemeToggle />
         <LanguageToggle />
         <button
+          onClick={() => setProjectOpen(true)}
+          className="text-muted-foreground hover:text-foreground transition-colors"
+          title={t("project.title")}
+          aria-label={t("project.title")}
+        >
+          <FolderGit2 size={15} />
+        </button>
+        <button
           onClick={() => setShowUpdate(true)}
           className="text-muted-foreground hover:text-foreground transition-colors"
           title={t("nav.checkUpdates")}
@@ -268,6 +279,7 @@ export default function App() {
         </a>
       </div>
       {showUpdate && <UpdateDialog onClose={() => setShowUpdate(false)} />}
+      <ProjectDialog open={projectOpen} onClose={() => setProjectOpen(false)} />
       <CommandPalette
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}

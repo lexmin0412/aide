@@ -429,5 +429,56 @@
       "driftCleaned": "Updated {{updated}} tool config(s), {{skipped}} skipped",
       "modelsSynced": "Synced {{count}} model target(s)"
     }
+  },
+  "project": {
+    "title": "Project profile",
+    "desc": "Link selected skills and MCP servers into a project folder and write the tool configs it needs.",
+    "emptyTitle": "No project selected",
+    "emptyDesc": "Open a project folder to link skills and MCP servers into it. Only the selected items are written.",
+    "openFolder": "Open project folder",
+    "pickFolderTitle": "Select a project folder",
+    "changeFolder": "Change folder",
+    "configured": "Profile configured",
+    "notConfigured": "No profile yet - defaults are pre-selected",
+    "selected": "{{count}} selected",
+    "missing": "Missing",
+    "loadFailed": "Failed to load project status: {{error}}",
+    "status": {
+      "linked": "{{count}} linked skill(s)"
+    },
+    "skills": {
+      "title": "Skills",
+      "search": "Filter skills...",
+      "empty": "No skills installed",
+      "noMatch": "No skills match"
+    },
+    "mcp": {
+      "title": "MCP servers",
+      "empty": "No MCP servers configured"
+    },
+    "tools": {
+      "title": "Tools",
+      "empty": "No tool supports project-level skills",
+      "detected": "Detected",
+      "alwaysManaged": "Tools that use .agents/skills are always managed."
+    },
+    "warningsTitle": "Warnings",
+    "sync": {
+      "title": "Last apply",
+      "summary": "Linked {{linked}} skill(s), removed {{removed}}, wrote {{tools}} tool config(s)"
+    },
+    "actions": {
+      "save": "Save & apply",
+      "saving": "Applying...",
+      "clear": "Clear profile",
+      "clearing": "Clearing...",
+      "clearConfirm": "Clear this project profile? Managed skill links and MCP entries will be removed and the project stays connected.",
+      "confirmClear": "Clear"
+    },
+    "toast": {
+      "saved": "Project profile applied: {{linked}} skill link(s), {{tools}} tool config(s)",
+      "cleared": "Project profile cleared: {{removed}} skill link(s) removed",
+      "failed": "Failed to apply project profile: {{error}}"
+    }
   }
 }

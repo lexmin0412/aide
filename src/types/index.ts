@@ -199,3 +199,54 @@ export interface DoctorReport {
   agent: DoctorAgentReport
   audit: DoctorAuditReport
 }
+
+/** Project profile persisted by the backend in the project folder. */
+export interface ProjectConfig {
+  version: number
+  skills: string[]
+  mcp: string[]
+  tools: string[]
+}
+
+/** One tool's project-level capability, as reported by `get_project_status`. */
+export interface ProjectToolStatus {
+  key: string
+  name: string
+  project_skills: string
+  detected_globally: boolean
+  supports_mcp: boolean
+}
+
+/** Full project profile status returned by `get_project_status`. */
+export interface ProjectStatus {
+  project_root: string
+  has_config: boolean
+  config: ProjectConfig
+  tools: ProjectToolStatus[]
+  missing_skills: string[]
+  missing_mcp: string[]
+  linked_skills: number
+  warnings: string[]
+}
+
+/** Skill-link outcome of `sync_project`. */
+export interface ProjectSkillSyncResult {
+  linked: number
+  removed: number
+  missing: string[]
+}
+
+/** MCP outcome of `sync_project`. */
+export interface ProjectMcpSyncResult {
+  tools_written: number
+  removed: number
+  unsupported: string[]
+}
+
+/** Result of applying a project profile with `sync_project`. */
+export interface ProjectSyncResult {
+  skills: ProjectSkillSyncResult
+  mcp: ProjectMcpSyncResult
+  warnings: string[]
+  errors: string[]
+}
