@@ -8,6 +8,9 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
+# pnpm falls back to a project-local store when the global store is not
+# writable (e.g. sandboxed environments such as CI agents).
+.pnpm-store
 dist
 dist-ssr
 *.local
