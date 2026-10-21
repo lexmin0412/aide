@@ -482,7 +482,10 @@ fn write_tool_config(path: &Path, content: &str, backups: Option<&Path>) -> Resu
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
     }
-    storage::write_bytes(path, content.as_bytes(), backups)
+    storage::write_bytes(path, content.as_bytes(), backups)?;
+    // MCP server definitions routinely carry env vars with API keys, so the
+    // tool's own config must not stay world-readable after aide writes it.
+    storage::restrict_permissions(path)
 }
 
 fn sync_json(
@@ -1107,6 +1110,44 @@ mod tests {
         assert_eq!(parsed["url"], "https://example.com//x");
         assert_eq!(parsed["nested"]["a"], 1);
         assert_eq!(parsed["list"][1], 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sync_writes_tool_configs_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = temp_dir("perms");
+        let json_path = dir.join("mcp.json");
+        let adapter = McpAdapter {
+            key: "test",
+            name: "Test",
+            config_path: "unused",
+            mcp_key: "mcpServers",
+            format: McpFormat::Json,
+        };
+        let mcp_value =
+            serde_json::json!({ "central": { "command": "bar", "env": { "TOKEN": "t" } } });
+        sync_json(&adapter, &json_path, &mcp_value, &[], None).unwrap();
+        assert_eq!(
+            fs::metadata(&json_path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+
+        let toml_path = dir.join("config.toml");
+        let toml_adapter = McpAdapter {
+            key: "codex",
+            name: "Codex",
+            config_path: "unused",
+            mcp_key: "mcp_servers",
+            format: McpFormat::Toml,
+        };
+        sync_toml(&toml_adapter, &toml_path, &mcp_value, &[], None).unwrap();
+        assert_eq!(
+            fs::metadata(&toml_path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

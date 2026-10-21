@@ -13,6 +13,7 @@ use std::io::{BufRead, Write};
 
 use serde_json::{json, Value};
 
+use aide_lib::audit;
 use aide_lib::git_sync;
 use aide_lib::registry;
 
@@ -31,6 +32,159 @@ fn skills_dir() -> Result<std::path::PathBuf, String> {
 
 fn aide_dir() -> Result<std::path::PathBuf, String> {
     Ok(home_dir()?.join(".aide"))
+}
+
+/// Read one of the agent allowlist environment variables. Unset or blank means
+/// "unrestricted", which keeps the sidecar's default behavior unchanged.
+fn env_allowlist(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn run_install(id: &str) -> Result<registry::RemoteInstallResult, String> {
+    let allowlist = env_allowlist("AIDE_MCP_ALLOW_INSTALL");
+    if let Err(err) = aide_lib::check_agent_install(allowlist.as_deref(), id) {
+        audit::record(
+            "install",
+            json!({ "source": "aide-mcp", "id": id, "ok": false, "blocked": true, "error": err }),
+        );
+        return Err(err);
+    }
+    let result = registry::install_from_id(id, &skills_dir()?, &aide_dir()?, false);
+    audit::record(
+        "install",
+        json!({
+            "source": "aide-mcp",
+            "id": id,
+            "ok": result.is_ok(),
+            "installed": result.as_ref().map(|r| r.installed.clone()).unwrap_or_default(),
+            "error": result.as_ref().err(),
+        }),
+    );
+    result
+}
+
+fn run_update(skill: &str) -> Result<registry::RemoteInstallResult, String> {
+    let aide = aide_dir()?;
+    let sources = registry::read_sources(&aide)?;
+    let meta = sources
+        .get(skill)
+        .ok_or_else(|| format!("No install source recorded for \"{skill}\""))?
+        .clone();
+    let allowlist = env_allowlist("AIDE_MCP_ALLOW_INSTALL");
+    if let Err(err) = aide_lib::check_agent_install(allowlist.as_deref(), &meta.id) {
+        audit::record(
+            "update",
+            json!({
+                "source": "aide-mcp",
+                "skill": skill,
+                "id": meta.id,
+                "ok": false,
+                "blocked": true,
+                "error": err,
+            }),
+        );
+        return Err(err);
+    }
+    let result = registry::install_from_id(&meta.id, &skills_dir()?, &aide, true);
+    audit::record(
+        "update",
+        json!({
+            "source": "aide-mcp",
+            "skill": skill,
+            "id": meta.id,
+            "ok": result.is_ok(),
+            "error": result.as_ref().err(),
+        }),
+    );
+    result
+}
+
+fn run_sync() -> Vec<aide_lib::SyncResult> {
+    let results = aide_lib::sync_all_skills_to_tools();
+    let linked = results
+        .iter()
+        .filter(|result| result.success && result.error.is_none())
+        .count();
+    let failed: Vec<&str> = results
+        .iter()
+        .filter(|result| !result.success)
+        .map(|result| result.key.as_str())
+        .collect();
+    audit::record(
+        "sync",
+        json!({
+            "source": "aide-mcp",
+            "tools": results.len(),
+            "linked": linked,
+            "failed": failed,
+        }),
+    );
+    results
+}
+
+fn resolve_scope(
+    config: &git_sync::GitRemotesConfig,
+    requested: Option<&str>,
+) -> Result<String, String> {
+    match requested {
+        Some(scope) => Ok(scope.to_string()),
+        None => git_sync::default_scope_name(config)
+            .ok_or_else(|| "No git scopes configured in ~/.aide/remotes.json".to_string()),
+    }
+}
+
+fn run_publish(requested: Option<&str>) -> Result<(String, git_sync::PublishOutcome), String> {
+    let aide = aide_dir()?;
+    let config = git_sync::read_config(&aide)?;
+    let scope = resolve_scope(&config, requested)?;
+    let allowlist = env_allowlist("AIDE_MCP_ALLOW_PUBLISH");
+    if let Err(err) = aide_lib::check_agent_publish(allowlist.as_deref(), &scope) {
+        audit::record(
+            "publish",
+            json!({ "source": "aide-mcp", "scope": &scope, "ok": false, "blocked": true, "error": err }),
+        );
+        return Err(err);
+    }
+    let outcome = git_sync::publish_scope(&config, &skills_dir()?, &aide, &scope);
+    audit::record(
+        "publish",
+        json!({
+            "source": "aide-mcp",
+            "scope": &scope,
+            "ok": outcome.is_ok(),
+            "skills": outcome.as_ref().map(|o| o.skills.len()).unwrap_or(0),
+            "error": outcome.as_ref().err(),
+        }),
+    );
+    Ok((scope, outcome?))
+}
+
+fn run_pull(requested: Option<&str>) -> Result<(String, git_sync::PullOutcome), String> {
+    let aide = aide_dir()?;
+    let config = git_sync::read_config(&aide)?;
+    let scope = resolve_scope(&config, requested)?;
+    let allowlist = env_allowlist("AIDE_MCP_ALLOW_PUBLISH");
+    if let Err(err) = aide_lib::check_agent_publish(allowlist.as_deref(), &scope) {
+        audit::record(
+            "pull",
+            json!({ "source": "aide-mcp", "scope": &scope, "ok": false, "blocked": true, "error": err }),
+        );
+        return Err(err);
+    }
+    let outcome = git_sync::pull_scope(&config, &skills_dir()?, &aide, &scope);
+    audit::record(
+        "pull",
+        json!({
+            "source": "aide-mcp",
+            "scope": &scope,
+            "ok": outcome.is_ok(),
+            "updated": outcome.as_ref().map(|o| o.updated.len()).unwrap_or(0),
+            "error": outcome.as_ref().err(),
+        }),
+    );
+    Ok((scope, outcome?))
 }
 
 fn tool_definitions() -> Value {
@@ -131,7 +285,7 @@ fn call_tool(name: &str, args: &Value) -> Result<String, String> {
         }
         "install_skill" => {
             let id = args["id"].as_str().ok_or("Missing required argument: id")?;
-            let result = registry::install_from_id(id, &skills_dir()?, &aide_dir()?, false)?;
+            let result = run_install(id)?;
             if !result.installed.is_empty() {
                 text_result(format!("Installed: {}", result.installed.join(", ")))
             } else if !result.skipped.is_empty() {
@@ -151,16 +305,11 @@ fn call_tool(name: &str, args: &Value) -> Result<String, String> {
             let skill = args["skill"]
                 .as_str()
                 .ok_or("Missing required argument: skill")?;
-            let sources = registry::read_sources(&aide_dir()?)?;
-            let meta = sources
-                .get(skill)
-                .ok_or_else(|| format!("No install source recorded for \"{skill}\""))?
-                .clone();
-            let result = registry::install_from_id(&meta.id, &skills_dir()?, &aide_dir()?, true)?;
+            let result = run_update(skill)?;
             text_result(format!("Updated: {}", result.installed.join(", ")))
         }
         "sync_all_tools" => {
-            let results = aide_lib::sync_all_skills_to_tools();
+            let results = run_sync();
             let linked = results
                 .iter()
                 .filter(|r| r.success && r.error.is_none())
@@ -172,15 +321,8 @@ fn call_tool(name: &str, args: &Value) -> Result<String, String> {
             ))
         }
         "publish_scope" | "pull_scope" => {
-            let aide = aide_dir()?;
-            let config = git_sync::read_config(&aide)?;
-            let scope = match args["scope"].as_str() {
-                Some(s) => s.to_string(),
-                None => git_sync::default_scope_name(&config)
-                    .ok_or("No git scopes configured in ~/.aide/remotes.json")?,
-            };
             let outcome = if name == "publish_scope" {
-                let o = git_sync::publish_scope(&config, &skills_dir()?, &aide, &scope)?;
+                let (scope, o) = run_publish(args["scope"].as_str())?;
                 format!(
                     "Published scope \"{scope}\": {} skill(s), committed: {}, pushed: {}",
                     o.skills.len(),
@@ -188,7 +330,7 @@ fn call_tool(name: &str, args: &Value) -> Result<String, String> {
                     o.pushed
                 )
             } else {
-                let o = git_sync::pull_scope(&config, &skills_dir()?, &aide, &scope)?;
+                let (scope, o) = run_pull(args["scope"].as_str())?;
                 format!(
                     "Pulled scope \"{scope}\": {} skill(s) updated from remote",
                     o.updated.len()
@@ -276,7 +418,14 @@ fn usage() -> String {
          aide-mcp update <skill>       Update a skill from its upstream\n  \
          aide-mcp sync                 Link skills to every supported tool\n  \
          aide-mcp publish [scope]      Publish a scope to its git remote\n  \
-         aide-mcp pull [scope]         Pull a scope from its git remote"
+         aide-mcp pull [scope]         Pull a scope from its git remote\n\n\
+         Environment:\n  \
+         AIDE_MCP_ALLOW_INSTALL        Comma-separated owner/repo prefixes allowed\n                                \
+                                       for install/update (unset = unrestricted)\n  \
+         AIDE_MCP_ALLOW_PUBLISH        Comma-separated git scopes allowed for\n                                \
+                                       publish/pull (unset = unrestricted)\n\n\
+         Every install, update, publish, pull and sync is appended to\n\
+         ~/.aide/audit.jsonl; secret-looking values are redacted."
     )
 }
 
@@ -340,7 +489,7 @@ fn cli_main(args: &[String]) -> Result<String, String> {
         }
         Some("install") => {
             let id = args.get(1).ok_or("Usage: aide-mcp install <id>")?;
-            let result = registry::install_from_id(id, &skills_dir()?, &aide_dir()?, false)?;
+            let result = run_install(id)?;
             if !result.installed.is_empty() {
                 Ok(format!("Installed: {}", result.installed.join(", ")))
             } else if !result.skipped.is_empty() {
@@ -370,16 +519,11 @@ fn cli_main(args: &[String]) -> Result<String, String> {
         }
         Some("update") => {
             let skill = args.get(1).ok_or("Usage: aide-mcp update <skill>")?;
-            let sources = registry::read_sources(&aide_dir()?)?;
-            let meta = sources
-                .get(skill)
-                .ok_or_else(|| format!("No install source recorded for \"{skill}\""))?
-                .clone();
-            let result = registry::install_from_id(&meta.id, &skills_dir()?, &aide_dir()?, true)?;
+            let result = run_update(skill)?;
             Ok(format!("Updated: {}", result.installed.join(", ")))
         }
         Some("sync") => {
-            let results = aide_lib::sync_all_skills_to_tools();
+            let results = run_sync();
             Ok(results
                 .iter()
                 .map(|r| {
@@ -398,15 +542,8 @@ fn cli_main(args: &[String]) -> Result<String, String> {
         }
         Some("publish") | Some("pull") => {
             let mode = args[0].clone();
-            let aide = aide_dir()?;
-            let config = git_sync::read_config(&aide)?;
-            let scope = match args.get(1) {
-                Some(s) => s.clone(),
-                None => git_sync::default_scope_name(&config)
-                    .ok_or("No git scopes configured in ~/.aide/remotes.json")?,
-            };
             if mode == "publish" {
-                let o = git_sync::publish_scope(&config, &skills_dir()?, &aide, &scope)?;
+                let (scope, o) = run_publish(args.get(1).map(String::as_str))?;
                 Ok(format!(
                     "Published \"{scope}\": {} skill(s), committed: {}, pushed: {}",
                     o.skills.len(),
@@ -414,7 +551,7 @@ fn cli_main(args: &[String]) -> Result<String, String> {
                     o.pushed
                 ))
             } else {
-                let o = git_sync::pull_scope(&config, &skills_dir()?, &aide, &scope)?;
+                let (scope, o) = run_pull(args.get(1).map(String::as_str))?;
                 Ok(format!(
                     "Pulled \"{scope}\": {} skill(s) updated",
                     o.updated.len()

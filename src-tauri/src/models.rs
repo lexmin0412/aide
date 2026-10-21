@@ -110,7 +110,9 @@ fn write_tool_config(path: &Path, home: &Path, content: &str) -> Result<(), Stri
         fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
     }
     let backups = home.join(".aide").join("backups");
-    storage::write_bytes(path, content.as_bytes(), Some(&backups))
+    storage::write_bytes(path, content.as_bytes(), Some(&backups))?;
+    // These configs hold API keys or auth env vars; keep them owner-only.
+    storage::restrict_permissions(path)
 }
 
 fn validate_profiles(config: &ModelProfilesConfig) -> Result<(), String> {
@@ -727,6 +729,40 @@ mod tests {
         sync_opencode(&profile, None, &home).unwrap();
         assert!(dir.join("opencode.json").is_file());
         assert!(!dir.join("opencode.jsonc").exists());
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn synced_tool_configs_are_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let base = temp_base("perms-tool");
+        let home = base.join("home");
+        fs::create_dir_all(&home).unwrap();
+        let profile = sample_profile();
+
+        sync_claude_code(&profile, &home).unwrap();
+        let settings = home.join(".claude/settings.json");
+        assert_eq!(
+            fs::metadata(&settings).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+
+        sync_opencode(&profile, None, &home).unwrap();
+        // A fresh install writes OpenCode's JSONC config.
+        let opencode = home.join(".config/opencode/opencode.jsonc");
+        assert_eq!(
+            fs::metadata(&opencode).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+
+        sync_codex(&profile, &home).unwrap();
+        let codex = home.join(".codex/config.toml");
+        assert_eq!(
+            fs::metadata(&codex).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
         let _ = fs::remove_dir_all(&base);
     }
 
