@@ -492,7 +492,7 @@ fn mirror_skills(
         }
         let central = skills_dir.join(&name);
         if fs::symlink_metadata(&central).is_err() {
-            crate::copy_dir_into_place(&p, &central)
+            crate::fsutil::copy_dir_into_place(&p, &central)
                 .map_err(|e| format!("Failed to restore remote skill \"{name}\": {e}"))?;
             rescued.push(name.clone());
         }
@@ -510,7 +510,7 @@ fn mirror_skills(
         }
         // Stage the copy and swap it in so a failed copy never leaves a
         // half-written skill in the worktree.
-        crate::copy_dir_into_place(&src, &worktree.join(name))
+        crate::fsutil::copy_dir_into_place(&src, &worktree.join(name))
             .map_err(|e| format!("Failed to copy \"{name}\": {e}"))?;
     }
     Ok(rescued)
@@ -557,7 +557,7 @@ fn write_back_from_worktree(
             }
             created.push(name.clone());
         }
-        crate::copy_dir_into_place(&p, &central)
+        crate::fsutil::copy_dir_into_place(&p, &central)
             .map_err(|e| format!("Failed to write \"{name}\" back: {e}"))?;
     }
     Ok(created)
@@ -777,11 +777,56 @@ pub fn pull_scope(
         let dest = skills_dir.join(&name);
         // Stage next to the destination and swap with renames: the current copy
         // stays readable until the replacement is complete.
-        crate::copy_dir_into_place(&p, &dest)
+        crate::fsutil::copy_dir_into_place(&p, &dest)
             .map_err(|e| format!("Failed to write \"{name}\": {e}"))?;
         updated.push(name);
     }
     Ok(PullOutcome { updated })
+}
+
+// ── Default-home helpers ──
+
+/// Read `~/.aide/remotes.json`.
+pub fn read_default() -> Result<GitRemotesConfig, String> {
+    read_config(&crate::aide_dir()?)
+}
+
+/// Write `~/.aide/remotes.json`.
+pub fn write_default(config: &GitRemotesConfig) -> Result<(), String> {
+    write_config(&crate::aide_dir()?, config)
+}
+
+/// Assign a skill to a scope (None clears the explicit assignment).
+pub fn set_skill_scope(skill: &str, scope: Option<&str>) -> Result<(), String> {
+    let aide_dir = crate::aide_dir()?;
+    let mut config = read_config(&aide_dir)?;
+    match scope {
+        Some(scope) => {
+            config
+                .skill_scopes
+                .insert(skill.to_string(), scope.to_string());
+        }
+        None => {
+            config.skill_scopes.remove(skill);
+        }
+    }
+    write_config(&aide_dir, &config)
+}
+
+/// Publish a scope against the real home directory and central skill store.
+pub fn publish_default(scope: &str) -> Result<PublishOutcome, String> {
+    let aide_dir = crate::aide_dir()?;
+    let config = read_config(&aide_dir)?;
+    let skills_dir = crate::skills::resolve_skills_source()?;
+    publish_scope(&config, &skills_dir, &aide_dir, scope)
+}
+
+/// Pull a scope against the real home directory and central skill store.
+pub fn pull_default(scope: &str) -> Result<PullOutcome, String> {
+    let aide_dir = crate::aide_dir()?;
+    let config = read_config(&aide_dir)?;
+    let skills_dir = crate::skills::resolve_skills_source()?;
+    pull_scope(&config, &skills_dir, &aide_dir, scope)
 }
 
 #[cfg(test)]

@@ -977,6 +977,267 @@ pub struct SyncMcpResult {
     pub message: String,
 }
 
+// ── Command-facing views and helpers ──
+
+/// Name of the MCP server entry that exposes aide's own sidecar.
+pub const AGENT_SERVER_NAME: &str = "aide";
+
+/// Central server in the shape the GUI edits (round-trips through `save`).
+#[derive(Debug, Serialize, Deserialize)]
+pub struct McpServerView {
+    pub name: String,
+    pub command: Option<String>,
+    pub args: Option<Vec<String>>,
+    pub url: Option<String>,
+    pub env: Option<HashMap<String, String>>,
+    pub headers: Option<HashMap<String, String>>,
+    pub disabled: Option<bool>,
+    pub description: Option<String>,
+    pub targets: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct McpToolView {
+    pub key: String,
+    pub name: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct McpSyncResult {
+    pub key: String,
+    pub name: String,
+    pub skipped: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ImportResult {
+    pub source: String,
+    pub imported: Vec<String>,
+    pub skipped: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct McpDrift {
+    pub tool_key: String,
+    pub tool_name: String,
+    pub missing: Vec<String>,
+    pub leftover: Vec<String>,
+}
+
+fn to_sync_view(adapter: &McpAdapter, result: SyncMcpResult) -> McpSyncResult {
+    McpSyncResult {
+        key: adapter.key.to_string(),
+        name: adapter.name.to_string(),
+        skipped: result.skipped,
+        message: result.message,
+    }
+}
+
+/// Central servers in GUI shape.
+pub fn server_views() -> Result<Vec<McpServerView>, String> {
+    let central = read_central()?;
+    Ok(central
+        .servers
+        .into_iter()
+        .map(|(name, server)| McpServerView {
+            name,
+            command: server.command,
+            args: server.args,
+            url: server.url,
+            env: server.env,
+            headers: server.headers,
+            disabled: server.disabled,
+            description: server.description,
+            targets: server.targets,
+        })
+        .collect())
+}
+
+/// Replace the central server set from GUI shape.
+pub fn save_server_views(servers: Vec<McpServerView>) -> Result<(), String> {
+    let config = McpCentralConfig {
+        servers: servers
+            .into_iter()
+            .map(|server| {
+                (
+                    server.name,
+                    McpServerConfig {
+                        command: server.command,
+                        args: server.args,
+                        url: server.url,
+                        env: server.env,
+                        headers: server.headers,
+                        disabled: server.disabled,
+                        description: server.description,
+                        targets: server.targets,
+                    },
+                )
+            })
+            .collect(),
+    };
+    save_central(&config)
+}
+
+/// MCP-capable adapters in GUI shape.
+pub fn tool_views() -> Vec<McpToolView> {
+    all_mcp_adapters()
+        .into_iter()
+        .map(|adapter| McpToolView {
+            key: adapter.key.to_string(),
+            name: adapter.name.to_string(),
+        })
+        .collect()
+}
+
+/// Sync the central config into one tool.
+pub fn sync_tool_view(tool_key: &str) -> Result<McpSyncResult, String> {
+    let adapter = all_mcp_adapters()
+        .into_iter()
+        .find(|adapter| adapter.key == tool_key)
+        .ok_or_else(|| format!("Unknown tool: {tool_key}"))?;
+    let config = read_central()?;
+    let result = sync_to_tool(&adapter, &config)?;
+    Ok(to_sync_view(&adapter, result))
+}
+
+/// Sync the central config into every tool, reporting per-tool failures.
+pub fn sync_all_views() -> Result<Vec<McpSyncResult>, String> {
+    let config = read_central()?;
+    Ok(all_mcp_adapters()
+        .into_iter()
+        .map(|adapter| match sync_to_tool(&adapter, &config) {
+            Ok(result) => to_sync_view(&adapter, result),
+            Err(error) => McpSyncResult {
+                key: adapter.key.to_string(),
+                name: adapter.name.to_string(),
+                skipped: true,
+                message: format!("Failed: {error}"),
+            },
+        })
+        .collect())
+}
+
+/// Import MCP servers from every installed tool into the central config.
+pub fn import_all() -> Result<Vec<ImportResult>, String> {
+    let mut central = read_central()?;
+    let mut results = Vec::new();
+    for adapter in all_mcp_adapters() {
+        match import_from_adapter(&adapter, &mut central) {
+            Ok(result) => {
+                if !result.imported.is_empty() || !result.skipped.is_empty() {
+                    results.push(ImportResult {
+                        source: result.source,
+                        imported: result.imported,
+                        skipped: result.skipped,
+                        error: None,
+                    });
+                }
+            }
+            Err(error) => results.push(ImportResult {
+                source: adapter.name.to_string(),
+                imported: vec![],
+                skipped: vec![],
+                error: Some(error),
+            }),
+        }
+    }
+    // save_central is atomic and backs up the previous revision; propagate its
+    // failure instead of leaving the UI with a silently unsaved import.
+    save_central(&central)?;
+    Ok(results)
+}
+
+/// Compare every installed tool config against the central config and the
+/// managed manifest. Only adapters with actual differences are reported.
+pub fn drift() -> Result<Vec<McpDrift>, String> {
+    let central = read_central()?;
+    let managed = read_managed()?;
+    let mut drifts = Vec::new();
+    for adapter in all_mcp_adapters() {
+        let config_path = adapter.resolve_path()?;
+        if let Some(drift) = compute_drift(&adapter, &config_path, &central, &managed)? {
+            drifts.push(McpDrift {
+                tool_key: adapter.key.to_string(),
+                tool_name: adapter.name.to_string(),
+                missing: drift.missing,
+                leftover: drift.leftover,
+            });
+        }
+    }
+    Ok(drifts)
+}
+
+/// Re-sync every tool so servers aide no longer manages disappear from configs.
+pub fn cleanup_drift() -> Result<Vec<McpSyncResult>, String> {
+    let config = read_central()?;
+    all_mcp_adapters()
+        .into_iter()
+        .map(|adapter| {
+            // Unlike `sync_all_views`, config read errors propagate: cleanup must
+            // not report success while a corrupt tool config was left behind.
+            let result = sync_to_tool(&adapter, &config)?;
+            Ok(to_sync_view(&adapter, result))
+        })
+        .collect()
+}
+
+/// Add or remove aide's own MCP server entry, and on removal clean up the tool
+/// configs where aide wrote it. `command` is the sidecar binary path.
+pub fn set_agent_server(enable: bool, command: Option<&Path>) -> Result<(), String> {
+    let mut central = read_central()?;
+    if enable {
+        let path = command.ok_or("aide-mcp binary not found next to the running app")?;
+        central.servers.insert(
+            AGENT_SERVER_NAME.to_string(),
+            McpServerConfig {
+                command: Some(path.to_string_lossy().to_string()),
+                args: None,
+                url: None,
+                env: None,
+                headers: None,
+                disabled: Some(false),
+                description: Some("aide agent access: install, update and publish skills".into()),
+                targets: vec![],
+            },
+        );
+    } else {
+        central.servers.remove(AGENT_SERVER_NAME);
+    }
+    save_central(&central)?;
+    if !enable {
+        // Disabling must also remove the entry from every tool config where aide
+        // wrote it. Best effort: the central entry is already gone, so a failing
+        // tool config is surfaced instead of rolled back silently.
+        let managed = read_managed().map_err(|error| {
+            format!("Agent access disabled, but the MCP manifest is unreadable so tool configs were left untouched: {error}")
+        })?;
+        let mut first_error: Option<String> = None;
+        for adapter in all_mcp_adapters() {
+            let installed = adapter
+                .resolve_path()
+                .map(|path| path.exists())
+                .unwrap_or(false);
+            if !installed && !managed.tools.contains_key(adapter.key) {
+                continue;
+            }
+            if let Err(error) = sync_to_tool(&adapter, &central) {
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
+        }
+        if let Some(error) = first_error {
+            return Err(format!(
+                "Agent access disabled, but syncing one or more tool configs failed: {error}"
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

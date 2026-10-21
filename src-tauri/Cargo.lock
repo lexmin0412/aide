@@ -21,12 +21,9 @@ dependencies = [
 name = "aide"
 version = "0.2.0"
 dependencies = [
- "dirs",
- "flate2",
+ "aide-core",
  "serde",
  "serde_json",
- "serde_norway",
- "tar",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -34,6 +31,18 @@ dependencies = [
  "tauri-plugin-process",
  "tauri-plugin-updater",
  "tauri-plugin-window-state",
+]
+
+[[package]]
+name = "aide-core"
+version = "0.2.0"
+dependencies = [
+ "dirs",
+ "flate2",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "tar",
  "toml 0.8.2",
  "trash",
  "ureq",

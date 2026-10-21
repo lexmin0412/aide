@@ -13,25 +13,24 @@ use std::io::{BufRead, Write};
 
 use serde_json::{json, Value};
 
-use aide_lib::audit;
-use aide_lib::git_sync;
-use aide_lib::registry;
+use aide_core::skills;
+use aide_core::{audit, git_sync, registry};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const SUPPORTED_PROTOCOLS: [&str; 2] = ["2025-06-18", "2025-03-26"];
 
 fn home_dir() -> Result<std::path::PathBuf, String> {
-    dirs::home_dir().ok_or_else(|| "Cannot find home directory".to_string())
+    aide_core::home_dir()
 }
 
 fn skills_dir() -> Result<std::path::PathBuf, String> {
-    let dir = aide_lib::resolve_skills_source()?;
+    let dir = skills::resolve_skills_source()?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir)
 }
 
 fn aide_dir() -> Result<std::path::PathBuf, String> {
-    Ok(home_dir()?.join(".aide"))
+    home_dir().map(|home| home.join(".aide"))
 }
 
 /// Read one of the agent allowlist environment variables. Unset or blank means
@@ -44,7 +43,7 @@ fn env_allowlist(name: &str) -> Option<String> {
 
 fn run_install(id: &str) -> Result<registry::RemoteInstallResult, String> {
     let allowlist = env_allowlist("AIDE_MCP_ALLOW_INSTALL");
-    if let Err(err) = aide_lib::check_agent_install(allowlist.as_deref(), id) {
+    if let Err(err) = skills::check_agent_install(allowlist.as_deref(), id) {
         audit::record(
             "install",
             json!({ "source": "aide-mcp", "id": id, "ok": false, "blocked": true, "error": err }),
@@ -73,7 +72,7 @@ fn run_update(skill: &str) -> Result<registry::RemoteInstallResult, String> {
         .ok_or_else(|| format!("No install source recorded for \"{skill}\""))?
         .clone();
     let allowlist = env_allowlist("AIDE_MCP_ALLOW_INSTALL");
-    if let Err(err) = aide_lib::check_agent_install(allowlist.as_deref(), &meta.id) {
+    if let Err(err) = skills::check_agent_install(allowlist.as_deref(), &meta.id) {
         audit::record(
             "update",
             json!({
@@ -101,8 +100,8 @@ fn run_update(skill: &str) -> Result<registry::RemoteInstallResult, String> {
     result
 }
 
-fn run_sync() -> Vec<aide_lib::SyncResult> {
-    let results = aide_lib::sync_all_skills_to_tools();
+fn run_sync() -> Vec<skills::SyncResult> {
+    let results = skills::sync_all_skills_to_tools();
     let linked = results
         .iter()
         .filter(|result| result.success && result.error.is_none())
@@ -140,7 +139,7 @@ fn run_publish(requested: Option<&str>) -> Result<(String, git_sync::PublishOutc
     let config = git_sync::read_config(&aide)?;
     let scope = resolve_scope(&config, requested)?;
     let allowlist = env_allowlist("AIDE_MCP_ALLOW_PUBLISH");
-    if let Err(err) = aide_lib::check_agent_publish(allowlist.as_deref(), &scope) {
+    if let Err(err) = skills::check_agent_publish(allowlist.as_deref(), &scope) {
         audit::record(
             "publish",
             json!({ "source": "aide-mcp", "scope": &scope, "ok": false, "blocked": true, "error": err }),
@@ -166,7 +165,7 @@ fn run_pull(requested: Option<&str>) -> Result<(String, git_sync::PullOutcome), 
     let config = git_sync::read_config(&aide)?;
     let scope = resolve_scope(&config, requested)?;
     let allowlist = env_allowlist("AIDE_MCP_ALLOW_PUBLISH");
-    if let Err(err) = aide_lib::check_agent_publish(allowlist.as_deref(), &scope) {
+    if let Err(err) = skills::check_agent_publish(allowlist.as_deref(), &scope) {
         audit::record(
             "pull",
             json!({ "source": "aide-mcp", "scope": &scope, "ok": false, "blocked": true, "error": err }),
@@ -266,14 +265,14 @@ fn text_result(text: String) -> Result<String, String> {
 fn call_tool(name: &str, args: &Value) -> Result<String, String> {
     match name {
         "list_skills" => {
-            let skills = aide_lib::skill_infos()?;
+            let skills = skills::skill_infos()?;
             text_result(serde_json::to_string_pretty(&skills).map_err(|e| e.to_string())?)
         }
         "search_skills" => {
             let query = args["query"]
                 .as_str()
                 .ok_or("Missing required argument: query")?;
-            let matches = aide_lib::search_skills_in(&skills_dir()?, query);
+            let matches = skills::search_skills_in(&skills_dir()?, query);
             text_result(serde_json::to_string_pretty(&matches).map_err(|e| e.to_string())?)
         }
         "search_registry" => {
@@ -438,7 +437,7 @@ fn cli_main(args: &[String]) -> Result<String, String> {
         Some("--help") | Some("-h") => Ok(usage()),
         Some("--version") | Some("-V") => Ok(format!("aide-mcp {VERSION}")),
         Some("list") => {
-            let skills = aide_lib::skill_infos()?;
+            let skills = skills::skill_infos()?;
             if skills.is_empty() {
                 return Ok("No skills installed".into());
             }
@@ -461,7 +460,7 @@ fn cli_main(args: &[String]) -> Result<String, String> {
         }
         Some("search") => {
             let query = args.get(1).ok_or("Usage: aide-mcp search <query>")?;
-            let matches = aide_lib::search_skills_in(&skills_dir()?, query);
+            let matches = skills::search_skills_in(&skills_dir()?, query);
             if matches.is_empty() {
                 return Ok("No matches".into());
             }

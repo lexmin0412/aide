@@ -53,17 +53,26 @@ src/
 └── main.tsx               # Entry point
 
 src-tauri/
+├── Cargo.toml             # app crate `aide` (Tauri commands + bundles the sidecar)
+├── core/                  # headless crate `aide-core` (no Tauri/webkit dependency)
+│   ├── Cargo.toml
+│   └── src/
+│       ├── lib.rs         # crate root: module tree + home/aide dir helpers
+│       ├── skills.rs      # Skill store, SKILL.md parsing/search/tags, tool sync + caching, agent allowlists
+│       ├── files.rs       # File-editing helpers behind the path policy
+│       ├── fsutil.rs      # Safe recursive copy/swap, skill discovery, file counting
+│       ├── storage.rs     # Atomic writes, backups, strict JSON reads (missing vs corrupt)
+│       ├── policy.rs      # Path policy for file-editing commands (home scope, sensitive denylist)
+│       ├── audit.rs       # JSONL audit trail for agent/high-risk operations (rotating, redacted)
+│       ├── adapter/mod.rs # Tool adapter definitions (43 AI tools)
+│       ├── registry.rs    # skills.sh registry search + GitHub install
+│       ├── git_sync.rs    # Scoped git backup/share (publish/pull per remote)
+│       ├── models.rs      # Model profiles + models.dev registry + per-tool sync
+│       └── mcp.rs         # Central MCP config, managed manifest, tool adapters, drift
 └── src/
-    ├── lib.rs             # Tauri commands (42 commands)
+    ├── lib.rs             # Thin #[tauri::command] layer (42 commands) delegating to aide-core
     ├── main.rs            # Entry point
-    ├── storage.rs         # Atomic writes, backups, strict JSON reads (missing vs corrupt)
-    ├── policy.rs          # Path policy for the file-editing commands (home scope, sensitive denylist)
-    ├── audit.rs           # JSONL audit trail for agent/high-risk operations (rotating, redacted)
-    ├── adapter/mod.rs     # Tool adapter definitions (43 AI tools)
-    ├── registry.rs        # skills.sh registry search + GitHub install
-    ├── git_sync.rs        # Scoped git backup/share (publish/pull per remote)
-    ├── models.rs          # Model profiles + models.dev registry + per-tool sync
-    └── bin/aide-mcp.rs    # MCP stdio server + CLI over the same core (sidecar)
+    └── bin/aide-mcp.rs    # MCP stdio server + CLI (links aide-core only, no Tauri)
 ```
 
 ## Rust Commands (src-tauri/src/lib.rs)
@@ -119,7 +128,7 @@ src-tauri/
 - **No emoji** in code or commit messages
 - **No README** files unless explicitly requested
 - All Rust commands return `Result<T, String>`
-- **Persistence goes through `storage.rs`**: never `fs::write` a user config directly. Use `storage::atomic_write` / `write_json` (temp + fsync + rename + backup) and `storage::read_json` (returns `Err` on corrupt files — never fall back to defaults and overwrite the user's file)
+- **Persistence goes through `aide-core/src/storage.rs`**: never `fs::write` a user config directly. Use `storage::atomic_write` / `write_json` (temp + fsync + rename + backup) and `storage::read_json` (returns `Err` on corrupt files — never fall back to defaults and overwrite the user's file)
 - Frontend invokes via `@tauri-apps/api/core` `invoke()`
 - Editor keymap uses `useRef` for callbacks to avoid stale closures
 - CSS variables in `:root`/`.dark` for theming (light + dark palettes, oklch color space); theme preference stored in localStorage `theme` (absent = system)
@@ -139,14 +148,23 @@ pnpm test           # Vitest (pure logic + hooks)
 pnpm tauri build    # Production build + bundling
 
 cargo test --manifest-path src-tauri/Cargo.toml --lib
+cargo test --manifest-path src-tauri/core/Cargo.toml --lib
 cargo clippy --manifest-path src-tauri/Cargo.toml --lib --no-deps -- -D warnings
+cargo clippy --manifest-path src-tauri/core/Cargo.toml --lib --no-deps -- -D warnings
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
+cargo fmt --manifest-path src-tauri/core/Cargo.toml --check
 ```
 
 CI (`.github/workflows/ci.yml`) runs the same gates on every push/PR.
 
+Note: the app and core are one Cargo workspace rooted at `src-tauri/Cargo.toml`
+(`[workspace] members = ["core"]`), so both share `src-tauri/target` and
+`src-tauri/Cargo.lock`. `cargo fmt`/`cargo clippy` take a manifest path per
+crate, hence the duplicated gates above.
+
 ## Architecture Notes
 
+- **Crate split**: all headless logic (skills, tool sync, registry installs, git scopes, MCP, models, storage, path policy, audit) lives in the `aide-core` crate under `src-tauri/core`; `src-tauri/src/lib.rs` is only the `#[tauri::command]` layer, and `aide-mcp` depends on `aide-core` alone (no Tauri/webkit linkage)
 - **File CRUD** is path-scoped (see the path policy bullet below) and images are served via the Tauri asset protocol (`convertFileSrc`), not base64 IPC
 - **Persistence**: every config write goes through `storage.rs` (atomic temp+rename, previous revision copied to `~/.aide/backups`, 0600 for secret-bearing files); corrupt configs surface as errors, so a damaged `mcp.json`/`models.json`/`remotes.json` is never silently replaced by defaults
 - **Editor state** is split into two channels: the CodeMirror document is the single source of truth (dirty is reported once per dirty episode, not per keystroke), while `tab.content` is only a flushed snapshot. Save/preview/close/leave read the live document through a registered doc source, so switching tabs never loses edits. Undo history and scroll survive via a bounded LRU EditorState cache (`lib/editorStateCache.ts`, 16 entries)

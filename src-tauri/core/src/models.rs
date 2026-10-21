@@ -493,6 +493,32 @@ pub fn sync_all_profiles(
         .collect()
 }
 
+// ── Default-home helpers ──
+
+/// Sync one stored profile into its target tools.
+pub fn sync_profile_by_id(profile_id: &str) -> Result<Vec<ModelSyncResult>, String> {
+    let aide_dir = crate::aide_dir()?;
+    let home = crate::home_dir()?;
+    let config = read_profiles(&aide_dir)?;
+    let profile = config
+        .profiles
+        .iter()
+        .find(|profile| profile.id == profile_id)
+        .ok_or_else(|| format!("Unknown profile \"{profile_id}\""))?
+        .clone();
+    let providers = fetch_models_dev(&aide_dir, false)?;
+    Ok(sync_profile(&profile, &providers, &home))
+}
+
+/// Sync every stored profile into its target tools.
+pub fn sync_all_default() -> Result<Vec<ModelProfileSyncResult>, String> {
+    let aide_dir = crate::aide_dir()?;
+    let home = crate::home_dir()?;
+    let config = read_profiles(&aide_dir)?;
+    let providers = fetch_models_dev(&aide_dir, false)?;
+    Ok(sync_all_profiles(&config, &providers, &home))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

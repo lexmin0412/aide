@@ -451,7 +451,9 @@ fn valid_folder_name(name: &str) -> Option<String> {
 /// present, else the skill segment of the id, else the repository name. The
 /// GitHub archive root name (e.g. "repo-main") is never used.
 pub fn skill_dest_name(src: &Path, only_skill: Option<&str>, repo: &str) -> Result<String, String> {
-    if let Some(name) = crate::skill_frontmatter_name(src).and_then(|n| valid_folder_name(&n)) {
+    if let Some(name) =
+        crate::skills::skill_frontmatter_name(src).and_then(|n| valid_folder_name(&n))
+    {
         return Ok(name);
     }
     if let Some(skill) = only_skill.and_then(valid_folder_name) {
@@ -470,7 +472,7 @@ fn dir_matches_skill(dir: &Path, wanted: &str) -> bool {
     if dir_name == wanted {
         return true;
     }
-    crate::skill_frontmatter_name(dir).as_deref() == Some(wanted)
+    crate::skills::skill_frontmatter_name(dir).as_deref() == Some(wanted)
 }
 
 /// Install one or more skills from a GitHub repository into `skills_dir`,
@@ -538,7 +540,7 @@ pub fn install_from_id(
             }
             // Stage next to the destination and swap in, so a failed copy never
             // leaves a partial skill behind.
-            crate::copy_dir_into_place(&src, &dest)
+            crate::fsutil::copy_dir_into_place(&src, &dest)
                 .map_err(|e| format!("Failed to install \"{name}\": {e}"))?;
             record_source(
                 aide_dir,
@@ -554,6 +556,32 @@ pub fn install_from_id(
 
     let _ = fs::remove_dir_all(&tmp);
     result
+}
+
+// ── Default-home helpers ──
+
+/// Install a skill into the real central store.
+pub fn install_default(id: &str, force: bool) -> Result<RemoteInstallResult, String> {
+    let home = crate::home_dir()?;
+    let skills_dir = crate::skills::resolve_skills_source()?;
+    std::fs::create_dir_all(&skills_dir).map_err(|e| e.to_string())?;
+    install_from_id(id, &skills_dir, &home.join(".aide"), force)
+}
+
+/// Reinstall the skill recorded in `~/.aide/skill-sources.json`.
+pub fn update_default(skill: &str) -> Result<RemoteInstallResult, String> {
+    let aide_dir = crate::aide_dir()?;
+    let sources = read_sources(&aide_dir)?;
+    let meta = sources
+        .get(skill)
+        .ok_or_else(|| format!("No install source recorded for \"{skill}\""))?
+        .clone();
+    install_default(&meta.id, true)
+}
+
+/// Check the real provenance store for upstream updates.
+pub fn check_updates_default() -> Result<Vec<SkillUpdate>, String> {
+    check_updates(&crate::aide_dir()?)
 }
 
 #[cfg(test)]
