@@ -12,7 +12,7 @@ use serde::Serialize;
 
 use aide_core::mcp::{ImportResult, McpDrift, McpServerView, McpSyncResult, McpToolView};
 use aide_core::project::{ProjectConfig, ProjectStatus, ProjectSyncResult};
-use aide_core::{audit, files, git_sync, mcp, models, project, registry, skills, snapshot};
+use aide_core::{audit, bundle, files, git_sync, mcp, models, project, registry, skills, snapshot};
 use aide_core::{FileEntry, SkillInfo, SkillSearchMatch, SyncResult, ToolInfo};
 
 // ── Skills ──
@@ -112,6 +112,26 @@ fn get_project_status(project_path: String) -> Result<ProjectStatus, String> {
 #[tauri::command(async)]
 fn sync_project(project_path: String) -> Result<ProjectSyncResult, String> {
     project::sync_project(Path::new(&project_path))
+}
+
+// ── Portable environment bundles ──
+
+#[tauri::command(async)]
+fn export_bundle(
+    dest_path: String,
+    include_secrets: bool,
+) -> Result<bundle::BundleExportResult, String> {
+    bundle::export_bundle(Path::new(&dest_path), include_secrets)
+}
+
+#[tauri::command(async)]
+fn preview_bundle(path: String) -> Result<bundle::BundlePreview, String> {
+    bundle::preview_bundle(Path::new(&path))
+}
+
+#[tauri::command(async)]
+fn import_bundle(path: String, mode: String) -> Result<bundle::BundleImportResult, String> {
+    bundle::import_bundle(Path::new(&path), &mode)
 }
 
 // ── Environment snapshots ──
@@ -431,6 +451,9 @@ pub fn run() {
             save_project_config,
             get_project_status,
             sync_project,
+            export_bundle,
+            preview_bundle,
+            import_bundle,
             create_snapshot,
             list_snapshots,
             restore_snapshot,

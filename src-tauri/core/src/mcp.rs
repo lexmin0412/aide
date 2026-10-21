@@ -165,7 +165,7 @@ pub struct McpServerConfig {
     pub targets: Vec<String>,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct McpCentralConfig {
     #[serde(default)]
     pub servers: HashMap<String, McpServerConfig>,

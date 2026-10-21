@@ -7,6 +7,7 @@
 
 pub mod adapter;
 pub mod audit;
+pub mod bundle;
 pub mod doctor;
 pub mod files;
 pub mod fsutil;

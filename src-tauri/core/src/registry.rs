@@ -397,18 +397,47 @@ fn download_repo_tarball(
 
 /// Guard against decompression bombs: a small archive must not be able to fill
 /// the disk. Returns the running total of extracted file bytes.
-fn check_extraction_limits(size: u64, running_total: u64) -> Result<u64, String> {
-    if size > MAX_EXTRACTED_FILE_BYTES {
-        return Err("Archive contains a file larger than the 20 MB limit".to_string());
+fn check_extraction_limits(
+    size: u64,
+    running_total: u64,
+    max_file_bytes: u64,
+    max_total_bytes: u64,
+) -> Result<u64, String> {
+    if size > max_file_bytes {
+        return Err(format!(
+            "Archive contains a file larger than the {} MB limit",
+            max_file_bytes / (1024 * 1024)
+        ));
     }
     let total = running_total.saturating_add(size);
-    if total > MAX_EXTRACTED_TOTAL_BYTES {
-        return Err("Archive expands beyond the 150 MB limit".to_string());
+    if total > max_total_bytes {
+        return Err(format!(
+            "Archive expands beyond the {} MB limit",
+            max_total_bytes / (1024 * 1024)
+        ));
     }
     Ok(total)
 }
 
 fn extract_tarball(archive: &Path, dest: &Path) -> Result<(), String> {
+    extract_tarball_limited(
+        archive,
+        dest,
+        MAX_EXTRACTED_FILES,
+        MAX_EXTRACTED_TOTAL_BYTES,
+        MAX_EXTRACTED_FILE_BYTES,
+    )
+}
+
+/// Same extraction safety as registry installs, with explicit caps so bundles
+/// can use their own limits without duplicating the traversal checks.
+pub(crate) fn extract_tarball_limited(
+    archive: &Path,
+    dest: &Path,
+    max_files: usize,
+    max_total_bytes: u64,
+    max_file_bytes: u64,
+) -> Result<(), String> {
     let file = fs::File::open(archive).map_err(|e| e.to_string())?;
     let gz = flate2::read::GzDecoder::new(file);
     let mut archive = tar::Archive::new(gz);
@@ -425,12 +454,13 @@ fn extract_tarball(archive: &Path, dest: &Path) -> Result<(), String> {
             continue;
         }
         count += 1;
-        if count > MAX_EXTRACTED_FILES {
+        if count > max_files {
             return Err("Archive contains too many files".to_string());
         }
         if entry_type.is_file() {
             let size = entry.header().size().map_err(|e| e.to_string())?;
-            total_bytes = check_extraction_limits(size, total_bytes)?;
+            total_bytes =
+                check_extraction_limits(size, total_bytes, max_file_bytes, max_total_bytes)?;
         }
         // unpack_in returns false when the entry would escape `dest`.
         let unpacked = entry
@@ -952,9 +982,27 @@ mod tests {
 
     #[test]
     fn extraction_limits_reject_oversized_members() {
-        assert!(check_extraction_limits(1024, 0).is_ok());
-        assert!(check_extraction_limits(MAX_EXTRACTED_FILE_BYTES + 1, 0).is_err());
-        assert!(check_extraction_limits(1024, MAX_EXTRACTED_TOTAL_BYTES).is_err());
+        assert!(check_extraction_limits(
+            1024,
+            0,
+            MAX_EXTRACTED_FILE_BYTES,
+            MAX_EXTRACTED_TOTAL_BYTES
+        )
+        .is_ok());
+        assert!(check_extraction_limits(
+            MAX_EXTRACTED_FILE_BYTES + 1,
+            0,
+            MAX_EXTRACTED_FILE_BYTES,
+            MAX_EXTRACTED_TOTAL_BYTES
+        )
+        .is_err());
+        assert!(check_extraction_limits(
+            1024,
+            MAX_EXTRACTED_TOTAL_BYTES,
+            MAX_EXTRACTED_FILE_BYTES,
+            MAX_EXTRACTED_TOTAL_BYTES
+        )
+        .is_err());
     }
 
     #[test]
