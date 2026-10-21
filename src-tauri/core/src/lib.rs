@@ -14,6 +14,7 @@ pub mod git_sync;
 pub mod mcp;
 pub mod models;
 pub mod policy;
+pub mod project;
 pub mod registry;
 pub mod skills;
 pub mod storage;

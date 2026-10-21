@@ -301,73 +301,80 @@ fn server_map(central: &McpCentralConfig, adapter: &McpAdapter) -> serde_json::V
                 && (s.targets.is_empty() || s.targets.iter().any(|t| t == adapter.key))
         })
         .map(|(name, cfg)| {
+            if !is_adapter_format {
+                return (name.clone(), standard_server_json(cfg));
+            }
             let mut map = serde_json::Map::new();
-            if is_adapter_format {
-                let mut cmd_parts = vec![];
-                if let Some(cmd) = &cfg.command {
-                    cmd_parts.push(serde_json::Value::String(cmd.clone()));
-                }
-                if let Some(args) = &cfg.args {
-                    cmd_parts.extend(args.iter().map(|a| serde_json::Value::String(a.clone())));
-                }
-                if !cmd_parts.is_empty() {
-                    map.insert("command".into(), serde_json::Value::Array(cmd_parts));
-                    map.insert("type".into(), serde_json::Value::String("local".into()));
-                }
-                if let Some(url) = &cfg.url {
-                    map.insert("url".into(), serde_json::Value::String(url.clone()));
-                    map.insert("type".into(), serde_json::Value::String("remote".into()));
-                }
-                if let Some(env) = &cfg.env {
-                    let env_map: serde_json::Map<String, serde_json::Value> = env
-                        .iter()
-                        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
-                        .collect();
-                    map.insert("environment".into(), serde_json::Value::Object(env_map));
-                }
-                if let Some(headers) = &cfg.headers {
-                    let headers_map: serde_json::Map<String, serde_json::Value> = headers
-                        .iter()
-                        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
-                        .collect();
-                    map.insert("headers".into(), serde_json::Value::Object(headers_map));
-                }
-            } else {
-                if let Some(cmd) = &cfg.command {
-                    map.insert("command".into(), serde_json::Value::String(cmd.clone()));
-                }
-                if let Some(args) = &cfg.args {
-                    map.insert(
-                        "args".into(),
-                        serde_json::Value::Array(
-                            args.iter()
-                                .map(|a| serde_json::Value::String(a.clone()))
-                                .collect(),
-                        ),
-                    );
-                }
-                if let Some(url) = &cfg.url {
-                    map.insert("url".into(), serde_json::Value::String(url.clone()));
-                }
-                if let Some(env) = &cfg.env {
-                    let env_map: serde_json::Map<String, serde_json::Value> = env
-                        .iter()
-                        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
-                        .collect();
-                    map.insert("env".into(), serde_json::Value::Object(env_map));
-                }
-                if let Some(headers) = &cfg.headers {
-                    let headers_map: serde_json::Map<String, serde_json::Value> = headers
-                        .iter()
-                        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
-                        .collect();
-                    map.insert("headers".into(), serde_json::Value::Object(headers_map));
-                }
+            let mut cmd_parts = vec![];
+            if let Some(cmd) = &cfg.command {
+                cmd_parts.push(serde_json::Value::String(cmd.clone()));
+            }
+            if let Some(args) = &cfg.args {
+                cmd_parts.extend(args.iter().map(|a| serde_json::Value::String(a.clone())));
+            }
+            if !cmd_parts.is_empty() {
+                map.insert("command".into(), serde_json::Value::Array(cmd_parts));
+                map.insert("type".into(), serde_json::Value::String("local".into()));
+            }
+            if let Some(url) = &cfg.url {
+                map.insert("url".into(), serde_json::Value::String(url.clone()));
+                map.insert("type".into(), serde_json::Value::String("remote".into()));
+            }
+            if let Some(env) = &cfg.env {
+                let env_map: serde_json::Map<String, serde_json::Value> = env
+                    .iter()
+                    .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                    .collect();
+                map.insert("environment".into(), serde_json::Value::Object(env_map));
+            }
+            if let Some(headers) = &cfg.headers {
+                let headers_map: serde_json::Map<String, serde_json::Value> = headers
+                    .iter()
+                    .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                    .collect();
+                map.insert("headers".into(), serde_json::Value::Object(headers_map));
             }
             (name.clone(), serde_json::Value::Object(map))
         })
         .collect();
     serde_json::Value::Object(serde_json::Map::from_iter(server_map))
+}
+
+/// JSON shape aide writes for standard MCP configs (Claude/Codex-style
+/// `command`/`args`/`env`/`headers`). Shared by global sync and project sync.
+pub(crate) fn standard_server_json(server: &McpServerConfig) -> serde_json::Value {
+    let mut map = serde_json::Map::new();
+    if let Some(cmd) = &server.command {
+        map.insert("command".into(), serde_json::Value::String(cmd.clone()));
+    }
+    if let Some(args) = &server.args {
+        map.insert(
+            "args".into(),
+            serde_json::Value::Array(
+                args.iter()
+                    .map(|arg| serde_json::Value::String(arg.clone()))
+                    .collect(),
+            ),
+        );
+    }
+    if let Some(url) = &server.url {
+        map.insert("url".into(), serde_json::Value::String(url.clone()));
+    }
+    if let Some(env) = &server.env {
+        let env_map: serde_json::Map<String, serde_json::Value> = env
+            .iter()
+            .map(|(key, value)| (key.clone(), serde_json::Value::String(value.clone())))
+            .collect();
+        map.insert("env".into(), serde_json::Value::Object(env_map));
+    }
+    if let Some(headers) = &server.headers {
+        let headers_map: serde_json::Map<String, serde_json::Value> = headers
+            .iter()
+            .map(|(key, value)| (key.clone(), serde_json::Value::String(value.clone())))
+            .collect();
+        map.insert("headers".into(), serde_json::Value::Object(headers_map));
+    }
+    serde_json::Value::Object(map)
 }
 
 /// Sync central servers into a tool and return the names aide now owns for it.

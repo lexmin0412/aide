@@ -11,6 +11,7 @@ A unified hub for managing cross-agent AI configurations — Skills, MCP, and mo
 - **Skills Management**: Install, browse, edit, tag, and sync AI agent skills across 40+ tools via symlink/junction
 - **MCP Server Management**: Centralized MCP config with import/sync to tool-specific formats (JSON, JSONC, TOML)
 - **Model Management**: Provider profiles backed by models.dev (213+ providers) with locally-stored API keys, synced to Claude Code / OpenCode / Codex
+- **Project Profiles**: Per-repository `<project>/.aide/project.json` selecting skills, MCP servers and tools; one sync links skills into the shared and per-tool project directories and merges MCP entries — only links/entries aide itself created are ever removed
 - **Scoped Git Backup**: Publish/pull skills to separate git remotes (personal vs company) with safe, non-destructive conflict handling
 - **Agent Access**: Bundled `aide-mcp` sidecar exposes skills to agents over MCP (list/search/install/update/publish/pull)
 - **Safety**: atomic config writes with backups, path-scoped file commands, 0600 tool configs, and a redacted audit log with optional agent allowlists
@@ -48,10 +49,10 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --lib --no-deps -- -D warnings
 ## Project
 
 ```bash
-src/               # React frontend
-src-tauri/         # Rust backend + Tauri config
-├── src/lib.rs     # 40 Tauri commands
-├── src/storage.rs # Atomic writes, backups, strict config parsing
-├── src/adapter/   # Tool adapter definitions
-└── src/mcp.rs     # MCP config management
+src/                     # React frontend
+src-tauri/               # Tauri app crate + Cargo workspace root
+├── core/                # aide-core: headless logic (skills, MCP, models, git, project, doctor)
+├── src/lib.rs           # 47 thin Tauri commands delegating to aide-core
+├── src/main.rs          # Tauri entry point
+└── src/bin/aide-mcp.rs  # MCP/CLI sidecar built on aide-core (no Tauri)
 ```

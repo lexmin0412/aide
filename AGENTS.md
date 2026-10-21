@@ -63,6 +63,7 @@ src-tauri/
 │       ├── fsutil.rs      # Safe recursive copy/swap, skill discovery, file counting
 │       ├── storage.rs     # Atomic writes, backups, strict JSON reads (missing vs corrupt)
 │       ├── policy.rs      # Path policy for file-editing commands (home scope, sensitive denylist)
+│       ├── project.rs     # Project-scoped profiles: .aide/project.json, skill links, project MCP sync
 │       ├── audit.rs       # JSONL audit trail for agent/high-risk operations (rotating, redacted)
 │       ├── doctor.rs      # Aggregated health report (skills/tools/MCP/models/configs/agent/audit)
 │       ├── adapter/mod.rs # Tool adapter definitions (43 AI tools)
@@ -71,7 +72,7 @@ src-tauri/
 │       ├── models.rs      # Model profiles + models.dev registry + per-tool sync
 │       └── mcp.rs         # Central MCP config, managed manifest, tool adapters, drift
 └── src/
-    ├── lib.rs             # Thin #[tauri::command] layer (43 commands) delegating to aide-core
+    ├── lib.rs             # Thin #[tauri::command] layer (47 commands) delegating to aide-core
     ├── main.rs            # Entry point
     └── bin/aide-mcp.rs    # MCP stdio server + CLI (links aide-core only, no Tauri)
 ```
@@ -123,6 +124,10 @@ src-tauri/
 | `get_mcp_drift` | — | `Result<McpDrift[]>` | Compare each tool config with the central MCP config + managed manifest (`missing`/`leftover` per tool) |
 | `cleanup_mcp_drift` | — | `Result<McpSyncResult[]>` | Re-sync every tool so disabled/deleted servers are removed from its config |
 | `get_doctor_report` | — | `Result<DoctorReport>` | Aggregated environment health: skills (total/linked/broken/updates), tool statuses, MCP servers/disabled/drift, model profile targets, unparsable central configs, agent access, audit log size. Per-section failures are reported in the payload; async so the cold update check does not block IPC |
+| `read_project_config` | `project_path: string` | `Result<ProjectConfig \| null>` | Read `<project>/.aide/project.json`; null when absent, error when corrupt |
+| `save_project_config` | `project_path: string, config: ProjectConfig` | `void` | Validate the project root and atomically write the profile (creates `.aide/`), no side effects |
+| `get_project_status` | `project_path: string` | `Result<ProjectStatus>` | All 43 adapters with project skill dirs, global detection and MCP support, plus missing skills/MCP entries and the count of currently valid aide-managed links |
+| `sync_project` | `project_path: string` | `Result<ProjectSyncResult>` | Apply the profile: link selected skills into the shared and per-tool project dirs (deduped, never overwriting real files), merge/remove project MCP entries (managed.json only), report unsupported tools missing skills and per-tool errors |
 
 ## Conventions
 
@@ -178,6 +183,7 @@ crate, hence the duplicated gates above.
 - **Skill sync** uses symlinks (junctions on Windows, symlinks on Linux) from `~/.agents/skills` to each tool's skills directory. Tool-only skills are adopted into the central store, conflicting tool-side copies are always backed up to `~/.aide/sync-backup/<tool>/`, and the replaced directory is renamed (not deleted); creating the link restores the original on failure
 - **MCP sync is a managed upsert merge**: central servers override same-name entries in the tool config and tool-only servers are preserved. `~/.aide/mcp-managed.json` records which names aide wrote per tool, so disabling/deleting a server (or removing a tool from its `targets`) removes exactly those entries on the next sync; nothing aide did not write is ever deleted. `get_mcp_drift` reports tools whose config diverged (`missing`) or still contain no-longer-managed servers (`leftover`), and the UI offers `cleanup_mcp_drift`. Central config at `~/.aide/mcp.json`. Supported formats: JSON/JSONC/TOML; Trae and VS Code paths are per-OS; OpenCode config resolves to `opencode.jsonc` when present (else `opencode.json`, new installs use `.jsonc`) and the same file is used by model sync
 - **Long-running commands run off the IPC thread**: installs/updates, publish/pull, registry search, update checks, model provider fetch, MCP sync/drift and full-text search use `#[tauri::command(async)]`; progress reporting is still pending
+- **Project profiles**: `<project>/.aide/project.json` declares the skills, MCP servers and tools a repository needs; `sync_project` applies it. Skill links are written to `<project>/.agents/skills` plus each selected adapter's `project_skills` dir (deduped, so adapters sharing `.agents/skills` are managed once) and only symlinks resolving into `~/.agents/skills` are ever removed — real files, foreign symlinks and unrecorded paths are preserved. Project MCP entries are merged into `.mcp.json` (Claude Code), `.cursor/mcp.json` and `.vscode/mcp.json`; only names recorded in `<project>/.aide/managed.json` are removed, unparsable configs are left untouched and reported, and other selected tools are listed as `unsupported`. Project roots are validated (absolute existing dir, not root/home/`~/.aide`/`~/.agents`, `.aide` cannot be an escaping symlink)
 - **Doctor report**: `get_doctor_report` (core `doctor` module) aggregates the existing checks instead of reimplementing them — `skill_infos` (cached) for total/linked plus a raw scan for broken folders, `tool_infos` for sync state, `compute_drift` for MCP, model profile target markers, central config parsers for parse errors, the shared sidecar locator for agent access, and the audit log size. Every section degrades to zeros/empty plus a recorded error; only the home directory being unresolvable fails the command. The CLI/sidecar can call `doctor::doctor_report()` directly
 - **Update checks and skill listing are cached**: `check_skill_updates` groups by `(owner, repo, subtree)`, calls the GitHub API once per group and caches HEAD commits for 10 minutes in `~/.aide/cache/github-heads.json` (failures are not cached); `list_skills` caches parsed metadata by SKILL.md + skills-dir mtime and file counts for 60 s, and evicts deleted skills automatically
 - **File commands are path-scoped**: `read_text_file` / `write_text_file` / `create_*` / `delete_entry` / `rename_entry` go through `policy.rs` — absolute paths only, no `..`, canonical target must stay under the user's home; the one exception is a skill folder that is a symlink under `~/.agents/skills` pointing at a repo outside home. Sensitive paths (`.ssh`, `.gnupg`, `.aws`, `.azure`, `.config/gcloud`, `Library/Keychains`, `.kube/config`, `.docker/config.json`, `.netrc`, `.npmrc`) are denied for writes/deletes even inside home, and reads are capped at 5 MB. New file commands must use `policy::ensure_writable`/`ensure_readable`

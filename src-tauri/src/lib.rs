@@ -11,7 +11,8 @@ use std::path::Path;
 use serde::Serialize;
 
 use aide_core::mcp::{ImportResult, McpDrift, McpServerView, McpSyncResult, McpToolView};
-use aide_core::{audit, files, git_sync, mcp, models, registry, skills};
+use aide_core::project::{ProjectConfig, ProjectStatus, ProjectSyncResult};
+use aide_core::{audit, files, git_sync, mcp, models, project, registry, skills};
 use aide_core::{FileEntry, SkillInfo, SkillSearchMatch, SyncResult, ToolInfo};
 
 // ── Skills ──
@@ -82,6 +83,28 @@ fn update_skill_tags(path: String, tags: Vec<String>) -> Result<(), String> {
 #[tauri::command(async)]
 fn get_doctor_report() -> Result<aide_core::doctor::DoctorReport, String> {
     aide_core::doctor::doctor_report()
+}
+
+// ── Project-scoped profiles ──
+
+#[tauri::command(async)]
+fn read_project_config(project_path: String) -> Result<Option<ProjectConfig>, String> {
+    project::read_project_config(Path::new(&project_path))
+}
+
+#[tauri::command(async)]
+fn save_project_config(project_path: String, config: ProjectConfig) -> Result<(), String> {
+    project::save_project_config(Path::new(&project_path), &config)
+}
+
+#[tauri::command(async)]
+fn get_project_status(project_path: String) -> Result<ProjectStatus, String> {
+    project::project_status(Path::new(&project_path))
+}
+
+#[tauri::command(async)]
+fn sync_project(project_path: String) -> Result<ProjectSyncResult, String> {
+    project::sync_project(Path::new(&project_path))
 }
 
 // ── File-editing commands (path policy lives in aide-core) ──
@@ -360,6 +383,10 @@ pub fn run() {
             pull_scope,
             update_skill_tags,
             get_doctor_report,
+            read_project_config,
+            save_project_config,
+            get_project_status,
+            sync_project,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
