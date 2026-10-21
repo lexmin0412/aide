@@ -70,8 +70,18 @@ jobs:
 
       - name: Clippy (app + core)
         run: |
-          cargo clippy --manifest-path src-tauri/Cargo.toml --lib --no-deps -- -D warnings
-          cargo clippy --manifest-path src-tauri/core/Cargo.toml --lib --bins --no-deps -- -D warnings
+          status=0
+          cargo clippy --manifest-path src-tauri/Cargo.toml --lib --no-deps -- -D warnings 2>&1 | tee /tmp/clippy-app.log || status=1
+          cargo clippy --manifest-path src-tauri/core/Cargo.toml --lib --bins --no-deps -- -D warnings 2>&1 | tee /tmp/clippy-core.log || status=1
+          if [ "$status" -ne 0 ]; then
+            {
+              echo '### Clippy failure'
+              echo '```'
+              grep -E "^(error|warning)(\[|:)" -A 6 /tmp/clippy-app.log /tmp/clippy-core.log | head -200
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
 
       - name: Build script targets (app + sidecar)
         run: |
