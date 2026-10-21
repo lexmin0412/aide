@@ -80,6 +80,10 @@ jobs:
               grep -E "^(error|warning)(\[|:)" -A 6 /tmp/clippy-app.log /tmp/clippy-core.log | head -200
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
+            # Also emit annotations (readable via the check-runs API) so the
+            # first failing lint is visible without downloading logs.
+            grep -hE "^(error|warning)(\[|:)" /tmp/clippy-app.log /tmp/clippy-core.log \
+              | head -20 | sed 's/^/::error::/' || true
             exit 1
           fi
 
