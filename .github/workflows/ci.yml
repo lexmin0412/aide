@@ -60,6 +60,15 @@ jobs:
           components: rustfmt, clippy
           cache-workspaces: src-tauri -> target
 
+      # tauri-build validates bundle.externalBin resources even for lib/test
+      # builds. The real sidecar is produced by the release workflow, so CI only
+      # needs a placeholder at the expected triple-suffixed path.
+      - name: Placeholder sidecar resource
+        run: |
+          TRIPLE=$(rustc -vV | sed -n 's/host: //p')
+          mkdir -p src-tauri/binaries
+          touch "src-tauri/binaries/aide-mcp-$TRIPLE"
+
       # NOTE: these gates are intentionally blocking. The repository still has
       # pre-existing rustfmt drift and a few clippy warnings that are being
       # burned down; they must be fixed rather than silenced with `-A` flags.

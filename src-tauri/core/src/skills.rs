@@ -696,7 +696,9 @@ pub(crate) fn create_skills_link(source: &Path, target: &Path) -> Result<(), Str
     }
     #[cfg(windows)]
     {
-        std::os::windows::fs::junction(source, target).map_err(|e| e.to_string())
+        // `junction` is not available on stable Rust; directory symlinks are the
+        // supported equivalent (they may require Developer Mode on some hosts).
+        std::os::windows::fs::symlink_dir(source, target).map_err(|e| e.to_string())
     }
     #[cfg(not(any(unix, windows)))]
     {
