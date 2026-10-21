@@ -57,6 +57,8 @@ src-tauri/
     ├── lib.rs             # Tauri commands (42 commands)
     ├── main.rs            # Entry point
     ├── storage.rs         # Atomic writes, backups, strict JSON reads (missing vs corrupt)
+    ├── policy.rs          # Path policy for the file-editing commands (home scope, sensitive denylist)
+    ├── audit.rs           # JSONL audit trail for agent/high-risk operations (rotating, redacted)
     ├── adapter/mod.rs     # Tool adapter definitions (43 AI tools)
     ├── registry.rs        # skills.sh registry search + GitHub install
     ├── git_sync.rs        # Scoped git backup/share (publish/pull per remote)
@@ -145,7 +147,7 @@ CI (`.github/workflows/ci.yml`) runs the same gates on every push/PR.
 
 ## Architecture Notes
 
-- **File CRUD** uses direct Rust `std::fs` operations (unrestricted access); images are served via the Tauri asset protocol (`convertFileSrc`), not base64 IPC
+- **File CRUD** is path-scoped (see the path policy bullet below) and images are served via the Tauri asset protocol (`convertFileSrc`), not base64 IPC
 - **Persistence**: every config write goes through `storage.rs` (atomic temp+rename, previous revision copied to `~/.aide/backups`, 0600 for secret-bearing files); corrupt configs surface as errors, so a damaged `mcp.json`/`models.json`/`remotes.json` is never silently replaced by defaults
 - **Editor state** is split into two channels: the CodeMirror document is the single source of truth (dirty is reported once per dirty episode, not per keystroke), while `tab.content` is only a flushed snapshot. Save/preview/close/leave read the live document through a registered doc source, so switching tabs never loses edits. Undo history and scroll survive via a bounded LRU EditorState cache (`lib/editorStateCache.ts`, 16 entries)
 - **Tab reloads** are mtime-aware: non-dirty tabs only re-read when `get_file_mtime` reports a change
@@ -156,7 +158,10 @@ CI (`.github/workflows/ci.yml`) runs the same gates on every push/PR.
 - **Skill sync** uses symlinks (junctions on Windows, symlinks on Linux) from `~/.agents/skills` to each tool's skills directory. Tool-only skills are adopted into the central store, conflicting tool-side copies are always backed up to `~/.aide/sync-backup/<tool>/`, and the replaced directory is renamed (not deleted); creating the link restores the original on failure
 - **MCP sync is a managed upsert merge**: central servers override same-name entries in the tool config and tool-only servers are preserved. `~/.aide/mcp-managed.json` records which names aide wrote per tool, so disabling/deleting a server (or removing a tool from its `targets`) removes exactly those entries on the next sync; nothing aide did not write is ever deleted. `get_mcp_drift` reports tools whose config diverged (`missing`) or still contain no-longer-managed servers (`leftover`), and the UI offers `cleanup_mcp_drift`. Central config at `~/.aide/mcp.json`. Supported formats: JSON/JSONC/TOML; Trae and VS Code paths are per-OS; OpenCode config resolves to `opencode.jsonc` when present (else `opencode.json`, new installs use `.jsonc`) and the same file is used by model sync
 - **Long-running commands run off the IPC thread**: installs/updates, publish/pull, registry search, update checks, model provider fetch, MCP sync/drift and full-text search use `#[tauri::command(async)]`; progress reporting is still pending
-- **Update checks are deduped and cached**: `check_skill_updates` groups by `(owner, repo, subtree)`, calls the GitHub API once per group and caches HEAD commits for 10 minutes in `~/.aide/cache/github-heads.json`; failures are not cached. Pending: `list_skills` mtime cache (directory rescan is still O(skills × files))
+- **Update checks and skill listing are cached**: `check_skill_updates` groups by `(owner, repo, subtree)`, calls the GitHub API once per group and caches HEAD commits for 10 minutes in `~/.aide/cache/github-heads.json` (failures are not cached); `list_skills` caches parsed metadata by SKILL.md + skills-dir mtime and file counts for 60 s, and evicts deleted skills automatically
+- **File commands are path-scoped**: `read_text_file` / `write_text_file` / `create_*` / `delete_entry` / `rename_entry` go through `policy.rs` — absolute paths only, no `..`, canonical target must stay under the user's home; the one exception is a skill folder that is a symlink under `~/.agents/skills` pointing at a repo outside home. Sensitive paths (`.ssh`, `.gnupg`, `.aws`, `.azure`, `.config/gcloud`, `Library/Keychains`, `.kube/config`, `.docker/config.json`, `.netrc`, `.npmrc`) are denied for writes/deletes even inside home, and reads are capped at 5 MB. New file commands must use `policy::ensure_writable`/`ensure_readable`
+- **Audit trail**: agent and high-risk operations append redacted JSONL entries to `~/.aide/audit.jsonl` (rotated at 2 MB to `audit.jsonl.1`); `aide-mcp` honors `AIDE_MCP_ALLOW_INSTALL` (owner/repo prefixes) and `AIDE_MCP_ALLOW_PUBLISH` (scope names) allowlists, blocking before any network/git work when set
+- **Tool configs are owner-only**: MCP configs (JSON/JSONC/TOML) and model configs written by aide are chmod 0600 on unix, since they can contain env vars and API keys
 - **Tool adapters**: 43 tools with vercel-labs/skills-verified paths; tools whose global dir is `.agents/skills` are native (no symlink), the rest are linked on sync
 - **FileTree context menu**: right-click for Rename, Delete, Reveal in Finder, New File, New Folder; arrow keys navigate, Enter opens/toggles. Create/rename check for existing targets before writing
 - **New Skill** scaffolds `<name>/SKILL.md` with frontmatter via `create_directory` + `write_text_file`

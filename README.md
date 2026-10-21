@@ -13,6 +13,7 @@ A unified hub for managing cross-agent AI configurations — Skills, MCP, and mo
 - **Model Management**: Provider profiles backed by models.dev (213+ providers) with locally-stored API keys, synced to Claude Code / OpenCode / Codex
 - **Scoped Git Backup**: Publish/pull skills to separate git remotes (personal vs company) with safe, non-destructive conflict handling
 - **Agent Access**: Bundled `aide-mcp` sidecar exposes skills to agents over MCP (list/search/install/update/publish/pull)
+- **Safety**: atomic config writes with backups, path-scoped file commands, 0600 tool configs, and a redacted audit log with optional agent allowlists
 - **Config Browser**: View and edit raw config files for each supported AI tool
 - **Code Editor**: CodeMirror 6 with JSON linting, Markdown support, dark theme
 - **Image Viewer**: Preview png/jpg/gif/webp/svg/bmp files inline
