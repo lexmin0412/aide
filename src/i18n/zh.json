@@ -521,5 +521,43 @@
     "actionFailed": "快照操作失败：{{error}}",
     "meta": "{{skills}} 个技能 · {{files}} 个文件 · {{size}}",
     "hidden": "另有 {{count}} 个更早的快照未显示"
+  },
+  "bundle": {
+    "title": "环境包",
+    "desc": "把技能、MCP 服务器与模型配置导出为单个可移植文件，或在另一台机器上导入。",
+    "export": "导出环境包",
+    "exporting": "导出中...",
+    "import": "导入环境包",
+    "previewing": "读取环境包中...",
+    "importing": "导入中...",
+    "exportTitle": "导出环境包",
+    "importTitle": "选择环境包",
+    "fileFilter": "aide 环境包",
+    "includeNonSecret": "包含配置中的非敏感值",
+    "secretsNote": "API Key 及疑似密钥的值始终会被脱敏，仅列出受影响的配置路径。",
+    "exportedToast": "已导出 {{skills}} 个技能、{{mcp}} 个 MCP 服务器、{{profiles}} 个模型配置（{{size}}）到 {{path}} · 脱敏 {{redacted}} 项",
+    "previewFailed": "读取环境包失败：{{error}}",
+    "actionFailed": "环境包操作失败：{{error}}",
+    "previewTitle": "导入环境包",
+    "previewMeta": "格式 v{{version}} · 创建于 {{time}} · aide {{aide}}",
+    "file": "环境包：{{path}}",
+    "categories": {
+      "skills": "技能",
+      "mcp": "MCP 服务器",
+      "profiles": "模型配置"
+    },
+    "newCount": "新增 {{count}} 个",
+    "conflictCount": "冲突 {{count}} 个",
+    "includesSecretsNote": "该环境包导出时包含了配置中的非敏感值。",
+    "emptyPreview": "环境包中没有任何技能、MCP 服务器或模型配置。",
+    "redactedTitle": "已脱敏的密钥（{{count}}）",
+    "warningsTitle": "警告",
+    "modeTitle": "导入模式",
+    "modeMerge": "合并",
+    "modeMergeDesc": "仅新增条目；同名条目保留并计入冲突。",
+    "modeReplace": "替换",
+    "modeReplaceDesc": "用环境包中的版本替换同名技能、服务器与配置。",
+    "replaceWarning": "替换模式会把同名技能移入回收站，并覆盖同名的配置条目。",
+    "importedToast": "导入完成：新增 {{added}} 个、替换 {{replaced}} 个 · 安全快照 {{safety}}"
   }
 }

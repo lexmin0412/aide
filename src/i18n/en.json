@@ -521,5 +521,43 @@
     "actionFailed": "Snapshot action failed: {{error}}",
     "meta": "{{skills}} skills · {{files}} files · {{size}}",
     "hidden": "{{count}} older snapshot(s) not shown"
+  },
+  "bundle": {
+    "title": "Environment bundle",
+    "desc": "Export skills, MCP servers and model profiles into one portable file, or import them on another machine.",
+    "export": "Export bundle",
+    "exporting": "Exporting...",
+    "import": "Import bundle",
+    "previewing": "Reading bundle...",
+    "importing": "Importing...",
+    "exportTitle": "Export environment bundle",
+    "importTitle": "Select environment bundle",
+    "fileFilter": "aide bundle",
+    "includeNonSecret": "Include non-secret values from configs",
+    "secretsNote": "API keys and secret-looking values are always redacted; only the affected config paths are listed.",
+    "exportedToast": "Exported {{skills}} skill(s), {{mcp}} MCP server(s), {{profiles}} profile(s) ({{size}}) to {{path}} · {{redacted}} redacted secret(s)",
+    "previewFailed": "Failed to read the bundle: {{error}}",
+    "actionFailed": "Bundle action failed: {{error}}",
+    "previewTitle": "Import environment bundle",
+    "previewMeta": "Format v{{version}} · created {{time}} · aide {{aide}}",
+    "file": "Bundle: {{path}}",
+    "categories": {
+      "skills": "Skills",
+      "mcp": "MCP servers",
+      "profiles": "Model profiles"
+    },
+    "newCount": "{{count}} new",
+    "conflictCount": "{{count}} conflicting",
+    "includesSecretsNote": "This bundle was exported with non-secret config values included.",
+    "emptyPreview": "The bundle contains no skills, MCP servers or model profiles.",
+    "redactedTitle": "Redacted secrets ({{count}})",
+    "warningsTitle": "Warnings",
+    "modeTitle": "Import mode",
+    "modeMerge": "Merge",
+    "modeMergeDesc": "Add new items only; same-name entries are kept and listed as conflicts.",
+    "modeReplace": "Replace",
+    "modeReplaceDesc": "Replace same-name skills, servers and profiles with the bundle versions.",
+    "replaceWarning": "Replace mode moves same-name skills to the trash and overwrites config entries.",
+    "importedToast": "Imported: {{added}} added, {{replaced}} replaced · safety snapshot {{safety}}"
   }
 }

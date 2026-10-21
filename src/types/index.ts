@@ -280,3 +280,61 @@ export interface RestoreResult {
   skill_drift: number
   safety_snapshot: SnapshotMeta
 }
+
+/** One skill entry in a portable bundle manifest. */
+export interface BundleSkill {
+  name: string
+  hash: string
+}
+
+/** Model profile summary embedded in a portable bundle manifest. */
+export interface BundleProfile {
+  id: string
+  name: string
+  provider: string
+  base_url: string
+  model: string
+  models: string[]
+  targets: string[]
+}
+
+export type BundleImportMode = "merge" | "replace"
+
+/** Result of `export_bundle`. */
+export interface BundleExportResult {
+  path: string
+  skills: number
+  mcp_servers: number
+  model_profiles: number
+  bytes: number
+  redacted_secrets: string[]
+}
+
+/** Result of `preview_bundle` (read-only). */
+export interface BundlePreview {
+  format_version: number
+  created_at: number
+  aide_version: string
+  includes_secrets: boolean
+  skill_count: number
+  new_skills: string[]
+  conflicting_skills: string[]
+  new_mcp_servers: string[]
+  conflicting_mcp_servers: string[]
+  new_profiles: string[]
+  conflicting_profiles: string[]
+  redacted_secrets: string[]
+  warnings: string[]
+}
+
+/** Result of `import_bundle`. */
+export interface BundleImportResult {
+  skills_added: string[]
+  skills_replaced: string[]
+  mcp_added: string[]
+  mcp_replaced: string[]
+  profiles_added: string[]
+  profiles_replaced: string[]
+  safety_snapshot: string
+  warnings: string[]
+}

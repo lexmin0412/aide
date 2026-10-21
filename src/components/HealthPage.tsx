@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from "react"
 import { invoke } from "@tauri-apps/api/core"
+import { open, save } from "@tauri-apps/plugin-dialog"
 import {
   Bot,
   CheckCircle2,
   Cpu,
   FileText,
   History,
+  Package,
   RefreshCw,
   ScrollText,
   Server,
@@ -14,6 +16,7 @@ import {
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
@@ -42,7 +45,17 @@ import {
   latestSnapshots,
   summarizeRestoreResult,
 } from "@/lib/snapshots"
+import {
+  describeConflicts,
+  formatBundleBytes,
+  summarizeBundleImport,
+  summarizeBundlePreview,
+} from "@/lib/bundles"
 import type {
+  BundleExportResult,
+  BundleImportMode,
+  BundleImportResult,
+  BundlePreview,
   DoctorReport,
   McpCleanupResult,
   ModelProfileSyncResult,
@@ -98,6 +111,12 @@ export default function HealthPage({ active = true }: { active?: boolean } = {})
   const [snapshotLabel, setSnapshotLabel] = useState("")
   const [confirmRestore, setConfirmRestore] = useState<SnapshotMeta | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<SnapshotMeta | null>(null)
+  // Environment bundle state: export options, import preview and mode.
+  const [includeBundleSecrets, setIncludeBundleSecrets] = useState(false)
+  const [bundleBusy, setBundleBusy] = useState<"export" | "preview" | "import" | null>(null)
+  const [bundlePreview, setBundlePreview] = useState<BundlePreview | null>(null)
+  const [bundlePath, setBundlePath] = useState<string | null>(null)
+  const [importMode, setImportMode] = useState<BundleImportMode>("merge")
 
   const refreshReport = useCallback(async (): Promise<DoctorReport | null> => {
     try {
@@ -285,6 +304,89 @@ export default function HealthPage({ active = true }: { active?: boolean } = {})
       toast(t("snapshots.actionFailed", { error: String(e) }), "error")
     } finally {
       setSnapshotBusy(null)
+    }
+  }
+
+  const exportBundle = async () => {
+    setBundleBusy("export")
+    try {
+      const destPath = await save({
+        title: t("bundle.exportTitle"),
+        defaultPath: "aide-environment.aidebundle",
+        filters: [{ name: t("bundle.fileFilter"), extensions: ["aidebundle"] }],
+      })
+      if (typeof destPath !== "string") return
+      const result = await invoke<BundleExportResult>("export_bundle", {
+        destPath,
+        includeSecrets: includeBundleSecrets,
+      })
+      toast(
+        t("bundle.exportedToast", {
+          skills: result.skills,
+          mcp: result.mcp_servers,
+          profiles: result.model_profiles,
+          size: formatBundleBytes(result.bytes),
+          path: result.path,
+          redacted: result.redacted_secrets.length,
+        }),
+        "success"
+      )
+    } catch (e) {
+      toast(t("bundle.actionFailed", { error: String(e) }), "error")
+    } finally {
+      setBundleBusy(null)
+    }
+  }
+
+  const chooseBundleForImport = async () => {
+    setBundleBusy("preview")
+    try {
+      const selected = await open({
+        title: t("bundle.importTitle"),
+        multiple: false,
+        filters: [{ name: t("bundle.fileFilter"), extensions: ["aidebundle"] }],
+      })
+      if (typeof selected !== "string") return
+      const preview = await invoke<BundlePreview>("preview_bundle", { path: selected })
+      setBundlePath(selected)
+      setImportMode("merge")
+      setBundlePreview(preview)
+    } catch (e) {
+      toast(t("bundle.previewFailed", { error: String(e) }), "error")
+    } finally {
+      setBundleBusy(null)
+    }
+  }
+
+  const closeBundlePreview = () => {
+    setBundlePreview(null)
+    setBundlePath(null)
+  }
+
+  const confirmBundleImport = async () => {
+    if (!bundlePath) return
+    setBundleBusy("import")
+    try {
+      const result = await invoke<BundleImportResult>("import_bundle", {
+        path: bundlePath,
+        mode: importMode,
+      })
+      const summary = summarizeBundleImport(result)
+      toast(
+        t("bundle.importedToast", {
+          added: summary.added,
+          replaced: summary.replaced,
+          safety: summary.safetySnapshot,
+        }),
+        summary.warningCount > 0 ? "info" : "success"
+      )
+      closeBundlePreview()
+      void refreshReport()
+      refreshSnapshots()
+    } catch (e) {
+      toast(t("bundle.actionFailed", { error: String(e) }), "error")
+    } finally {
+      setBundleBusy(null)
     }
   }
 
@@ -618,6 +720,31 @@ export default function HealthPage({ active = true }: { active?: boolean } = {})
           )}
         </Section>
 
+        <Section title={t("bundle.title")} icon={<Package size={14} />}>
+          <p className="text-[11px] text-muted-foreground mb-2">{t("bundle.desc")}</p>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" variant="outline" disabled={bundleBusy !== null} onClick={() => void exportBundle()}>
+              {bundleBusy === "export" ? t("bundle.exporting") : t("bundle.export")}
+            </Button>
+            <Button size="sm" variant="outline" disabled={bundleBusy !== null} onClick={() => void chooseBundleForImport()}>
+              {bundleBusy === "preview" ? t("bundle.previewing") : t("bundle.import")}
+            </Button>
+          </div>
+          <div className="flex items-start gap-2 mt-3">
+            <Checkbox
+              id="bundle-include-non-secret"
+              checked={includeBundleSecrets}
+              onCheckedChange={(checked) => setIncludeBundleSecrets(checked === true)}
+            />
+            <div className="min-w-0">
+              <label htmlFor="bundle-include-non-secret" className="text-xs cursor-pointer">
+                {t("bundle.includeNonSecret")}
+              </label>
+              <p className="text-[10px] text-muted-foreground mt-0.5">{t("bundle.secretsNote")}</p>
+            </div>
+          </div>
+        </Section>
+
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Section title={t("health.sections.agent")} icon={<Bot size={14} />}>
             <p className="text-xs text-muted-foreground">
@@ -721,6 +848,136 @@ export default function HealthPage({ active = true }: { active?: boolean } = {})
               {t("snapshots.delete")}
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={bundlePreview !== null} onOpenChange={(next) => { if (!next) closeBundlePreview() }}>
+        <DialogContent className="sm:max-w-[560px] flex flex-col max-h-[85vh]">
+          {bundlePreview &&
+            (() => {
+              const summary = summarizeBundlePreview(bundlePreview)
+              const conflictRows = describeConflicts(bundlePreview)
+              return (
+                <>
+                  <DialogHeader>
+                    <DialogTitle>{t("bundle.previewTitle")}</DialogTitle>
+                    <DialogDescription>
+                      {t("bundle.previewMeta", {
+                        version: bundlePreview.format_version,
+                        time: formatSnapshotTime(bundlePreview.created_at),
+                        aide: bundlePreview.aide_version,
+                      })}
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="flex-1 min-h-0 space-y-3 overflow-y-auto pr-1">
+                    {bundlePath && (
+                      <p className="text-[10px] font-mono text-muted-foreground truncate" title={bundlePath}>
+                        {t("bundle.file", { path: bundlePath })}
+                      </p>
+                    )}
+                    <div className="grid grid-cols-3 gap-2">
+                      {conflictRows.map((row) => (
+                        <div key={row.category} className="rounded-lg border border-border p-2">
+                          <p className="text-[11px] font-medium">{t(`bundle.categories.${row.category}`)}</p>
+                          <p className="text-[10px] text-muted-foreground">
+                            {t("bundle.newCount", { count: row.newCount })}
+                          </p>
+                          <p
+                            className={`text-[10px] ${
+                              row.conflictingCount > 0 ? "text-amber-500" : "text-muted-foreground"
+                            }`}
+                          >
+                            {t("bundle.conflictCount", { count: row.conflictingCount })}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                    {bundlePreview.includes_secrets && (
+                      <p className="text-[11px] text-muted-foreground">{t("bundle.includesSecretsNote")}</p>
+                    )}
+                    {summary.isEmpty && (
+                      <p className="text-[11px] text-muted-foreground">{t("bundle.emptyPreview")}</p>
+                    )}
+                    {bundlePreview.redacted_secrets.length > 0 && (
+                      <div>
+                        <p className="text-xs font-medium">
+                          {t("bundle.redactedTitle", { count: bundlePreview.redacted_secrets.length })}
+                        </p>
+                        <ul className="mt-1 space-y-0.5">
+                          {bundlePreview.redacted_secrets.map((secretPath, index) => (
+                            <li
+                              key={`${index}-${secretPath}`}
+                              className="font-mono text-[10px] text-muted-foreground truncate"
+                              title={secretPath}
+                            >
+                              {secretPath}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {bundlePreview.warnings.length > 0 && (
+                      <div>
+                        <p className="text-xs font-medium text-amber-500">{t("bundle.warningsTitle")}</p>
+                        <ul className="mt-1 space-y-0.5">
+                          {bundlePreview.warnings.map((warning, index) => (
+                            <li key={`${index}-${warning}`} className="text-[11px] text-amber-500 break-words">
+                              {warning}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    <fieldset>
+                      <legend className="text-xs font-medium mb-1">{t("bundle.modeTitle")}</legend>
+                      <div className="space-y-1.5">
+                        <label className="flex items-start gap-2 text-xs cursor-pointer">
+                          <input
+                            type="radio"
+                            name="bundle-import-mode"
+                            value="merge"
+                            checked={importMode === "merge"}
+                            onChange={() => setImportMode("merge")}
+                            className="mt-0.5 accent-primary"
+                          />
+                          <span>
+                            <span className="font-medium">{t("bundle.modeMerge")}</span>
+                            {" · "}
+                            <span className="text-muted-foreground">{t("bundle.modeMergeDesc")}</span>
+                          </span>
+                        </label>
+                        <label className="flex items-start gap-2 text-xs cursor-pointer">
+                          <input
+                            type="radio"
+                            name="bundle-import-mode"
+                            value="replace"
+                            checked={importMode === "replace"}
+                            onChange={() => setImportMode("replace")}
+                            className="mt-0.5 accent-primary"
+                          />
+                          <span>
+                            <span className="font-medium">{t("bundle.modeReplace")}</span>
+                            {" · "}
+                            <span className="text-muted-foreground">{t("bundle.modeReplaceDesc")}</span>
+                          </span>
+                        </label>
+                        {importMode === "replace" && (
+                          <p className="text-[11px] text-destructive">{t("bundle.replaceWarning")}</p>
+                        )}
+                      </div>
+                    </fieldset>
+                  </div>
+                  <DialogFooter>
+                    <Button variant="ghost" size="sm" onClick={closeBundlePreview}>
+                      {t("common.cancel")}
+                    </Button>
+                    <Button size="sm" disabled={bundleBusy !== null} onClick={() => void confirmBundleImport()}>
+                      {bundleBusy === "import" ? t("bundle.importing") : t("bundle.import")}
+                    </Button>
+                  </DialogFooter>
+                </>
+              )
+            })()}
         </DialogContent>
       </Dialog>
     </div>
