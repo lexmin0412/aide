@@ -178,8 +178,22 @@ fn central_path() -> Result<PathBuf, String> {
 }
 
 pub fn read_central() -> Result<McpCentralConfig, String> {
-    let path = central_path()?;
-    Ok(storage::read_json(&path)?.unwrap_or_default())
+    read_central_at(&central_path()?)
+}
+
+/// Read a central MCP config from an explicit path (used by doctor and tests).
+pub fn read_central_at(path: &Path) -> Result<McpCentralConfig, String> {
+    Ok(storage::read_json(path)?.unwrap_or_default())
+}
+
+/// Locate the bundled `aide-mcp` sidecar binary next to the running executable.
+/// Same location in packaged builds and in target/debug during development.
+pub fn sidecar_path() -> Option<PathBuf> {
+    let dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    ["aide-mcp", "aide-mcp.exe"]
+        .iter()
+        .map(|name| dir.join(name))
+        .find(|path| path.exists())
 }
 
 pub fn save_central(config: &McpCentralConfig) -> Result<(), String> {
@@ -220,7 +234,7 @@ pub fn read_managed() -> Result<McpManagedState, String> {
     read_managed_at(&managed_path()?)
 }
 
-fn read_managed_at(path: &Path) -> Result<McpManagedState, String> {
+pub(crate) fn read_managed_at(path: &Path) -> Result<McpManagedState, String> {
     Ok(storage::read_json(path)?.unwrap_or_default())
 }
 

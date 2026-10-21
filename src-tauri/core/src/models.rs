@@ -70,7 +70,7 @@ pub fn write_profiles(aide_dir: &Path, config: &ModelProfilesConfig) -> Result<(
 
 /// Parse a JSON/JSONC tool config. A missing or empty file is an empty object;
 /// a corrupt file is an error so a sync can never replace it with defaults.
-fn read_jsonc_object(path: &Path) -> Result<Value, String> {
+pub(crate) fn read_jsonc_object(path: &Path) -> Result<Value, String> {
     let empty = || Value::Object(Default::default());
     if !path.exists() {
         return Ok(empty());
@@ -87,7 +87,7 @@ fn read_jsonc_object(path: &Path) -> Result<Value, String> {
     })
 }
 
-fn read_toml_table(path: &Path) -> Result<toml::Table, String> {
+pub(crate) fn read_toml_table(path: &Path) -> Result<toml::Table, String> {
     if !path.exists() {
         return Ok(toml::Table::new());
     }
@@ -265,7 +265,7 @@ pub struct ModelSyncResult {
     pub message: String,
 }
 
-fn profile_provider_name(profile: &ModelProfile) -> String {
+pub(crate) fn profile_provider_name(profile: &ModelProfile) -> String {
     format!("aide-{}", profile.id)
 }
 

@@ -77,6 +77,13 @@ fn update_skill_tags(path: String, tags: Vec<String>) -> Result<(), String> {
     skills::update_skill_tags(Path::new(&path), &tags)
 }
 
+/// Aggregated health report for the doctor page. Async because the skill update
+/// check can perform GitHub HEAD lookups on a cold 10-minute cache.
+#[tauri::command(async)]
+fn get_doctor_report() -> Result<aide_core::doctor::DoctorReport, String> {
+    aide_core::doctor::doctor_report()
+}
+
 // ── File-editing commands (path policy lives in aide-core) ──
 
 #[tauri::command]
@@ -249,16 +256,6 @@ fn pull_scope(scope: String) -> Result<git_sync::PullOutcome, String> {
 
 // ── Agent access (sidecar registration) ──
 
-/// The aide-mcp sidecar binary sits next to the main executable in packaged
-/// builds and in target/debug during development.
-fn sidecar_path() -> Option<std::path::PathBuf> {
-    let dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
-    ["aide-mcp", "aide-mcp.exe"]
-        .iter()
-        .map(|name| dir.join(name))
-        .find(|path| path.exists())
-}
-
 #[derive(Serialize)]
 pub struct AgentServerStatus {
     pub enabled: bool,
@@ -267,7 +264,7 @@ pub struct AgentServerStatus {
 }
 
 fn agent_server_status() -> AgentServerStatus {
-    let binary = sidecar_path();
+    let binary = mcp::sidecar_path();
     // Enabled only when the registered command still points at the sidecar that
     // ships with the running build: after an upgrade the stored path is stale
     // and the agent would silently fail to start.
@@ -303,7 +300,7 @@ fn get_agent_server() -> AgentServerStatus {
 
 #[tauri::command]
 fn enable_agent_access(enable: bool) -> Result<AgentServerStatus, String> {
-    mcp::set_agent_server(enable, sidecar_path().as_deref())?;
+    mcp::set_agent_server(enable, mcp::sidecar_path().as_deref())?;
     audit::record(
         "enable_agent_access",
         serde_json::json!({ "source": "gui", "enabled": enable }),
@@ -362,6 +359,7 @@ pub fn run() {
             publish_scope,
             pull_scope,
             update_skill_tags,
+            get_doctor_report,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

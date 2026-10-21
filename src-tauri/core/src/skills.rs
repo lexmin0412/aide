@@ -588,19 +588,15 @@ pub(crate) fn update_skill_tags_in(
 
 #[derive(Serialize)]
 pub struct ToolInfo {
-    key: String,
-    name: String,
-    global_skills: String,
-    detect_dir: String,
-    project_skills: String,
-    status: String,
+    pub key: String,
+    pub name: String,
+    pub global_skills: String,
+    pub detect_dir: String,
+    pub project_skills: String,
+    pub status: String,
 }
 
-fn tool_dir_exists(relative: &str) -> bool {
-    let home = match dirs::home_dir() {
-        Some(h) => h,
-        None => return false,
-    };
+fn tool_dir_exists_in(home: &Path, relative: &str) -> bool {
     home.join(relative).exists()
 }
 
@@ -610,17 +606,13 @@ pub fn resolve_skills_source() -> Result<std::path::PathBuf, String> {
         .ok_or_else(|| "Cannot find home directory".to_string())
 }
 
-pub(crate) fn compute_tool_status(t: &crate::adapter::ToolInfo) -> String {
-    if !tool_dir_exists(t.detect_dir) {
+pub(crate) fn compute_tool_status_in(home: &Path, t: &crate::adapter::ToolInfo) -> String {
+    if !tool_dir_exists_in(home, t.detect_dir) {
         return "not_installed".into();
     }
     if t.global_skills == ".agents/skills" {
         return "compatible".into();
     }
-    let home = match dirs::home_dir() {
-        Some(h) => h,
-        None => return "unknown".into(),
-    };
     let target = home.join(t.global_skills);
     if target.is_symlink() {
         if let Ok(link) = std::fs::read_link(&target) {
@@ -632,7 +624,7 @@ pub(crate) fn compute_tool_status(t: &crate::adapter::ToolInfo) -> String {
                     .map(|parent| parent.join(&link))
                     .unwrap_or(link)
             };
-            if same_path(&resolved, &resolve_skills_source().unwrap_or_default()) {
+            if same_path(&resolved, &home.join(".agents").join("skills")) {
                 return "synced".into();
             }
         }
@@ -643,12 +635,20 @@ pub(crate) fn compute_tool_status(t: &crate::adapter::ToolInfo) -> String {
     "ready".into()
 }
 
-/// Every supported tool with its current sync status.
+/// Every supported tool with its current sync status, for the real home.
 pub fn tool_infos() -> Vec<ToolInfo> {
+    match dirs::home_dir() {
+        Some(home) => tool_infos_at(&home),
+        None => Vec::new(),
+    }
+}
+
+/// Tool statuses for an explicit home directory (used by doctor and tests).
+pub(crate) fn tool_infos_at(home: &Path) -> Vec<ToolInfo> {
     crate::adapter::all_tools()
         .into_iter()
         .map(|t| {
-            let status = compute_tool_status(&t);
+            let status = compute_tool_status_in(home, &t);
             ToolInfo {
                 key: t.key.to_string(),
                 name: t.name.to_string(),

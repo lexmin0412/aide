@@ -7,6 +7,7 @@
 
 pub mod adapter;
 pub mod audit;
+pub mod doctor;
 pub mod files;
 pub mod fsutil;
 pub mod git_sync;
@@ -17,6 +18,7 @@ pub mod registry;
 pub mod skills;
 pub mod storage;
 
+pub use doctor::DoctorReport;
 pub use files::FileEntry;
 pub use skills::{SkillInfo, SkillSearchMatch, SyncResult, ToolInfo};
 
