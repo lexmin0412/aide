@@ -11,6 +11,8 @@ A unified hub for managing cross-agent AI configurations — Skills, MCP, and mo
 - **Skills Management**: Install, browse, edit, tag, and sync AI agent skills across 40+ tools via symlink/junction
 - **MCP Server Management**: Centralized MCP config with import/sync to tool-specific formats (JSON, JSONC, TOML)
 - **Model Management**: Provider profiles backed by models.dev (213+ providers) with locally-stored API keys, synced to Claude Code / OpenCode / Codex
+- **Skill Update Preview**: Review per-file `added`/`removed`/`changed` before updating a registry skill, with local-modification detection based on a recorded tree hash
+- **Environment Snapshots**: Capture and roll back MCP/model/scope configuration plus a skill inventory; restores take a safety snapshot first and report skill drift without touching skills (20 snapshots retained)
 - **Project Profiles**: Per-repository `<project>/.aide/project.json` selecting skills, MCP servers and tools; one sync links skills into the shared and per-tool project directories and merges MCP entries — only links/entries aide itself created are ever removed
 - **Scoped Git Backup**: Publish/pull skills to separate git remotes (personal vs company) with safe, non-destructive conflict handling
 - **Agent Access**: Bundled `aide-mcp` sidecar exposes skills to agents over MCP (list/search/install/update/publish/pull)

@@ -11,12 +11,14 @@ pub mod doctor;
 pub mod files;
 pub mod fsutil;
 pub mod git_sync;
+pub mod hash;
 pub mod mcp;
 pub mod models;
 pub mod policy;
 pub mod project;
 pub mod registry;
 pub mod skills;
+pub mod snapshot;
 pub mod storage;
 
 pub use doctor::DoctorReport;

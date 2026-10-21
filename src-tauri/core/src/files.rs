@@ -134,12 +134,18 @@ fn home() -> Result<std::path::PathBuf, String> {
     crate::policy::home_root()
 }
 
-/// List a directory for the file tree.
-pub fn list_directory(path: &Path) -> Result<Vec<FileEntry>, String> {
+/// List a directory for the file tree, behind the path policy.
+pub(crate) fn list_directory_in(home: &Path, path: &Path) -> Result<Vec<FileEntry>, String> {
+    crate::policy::ensure_readable_in(home, path)?;
     if !path.is_dir() {
         return Err(format!("Not a directory: {}", path.display()));
     }
     read_dir_entries(path).map_err(|e| e.to_string())
+}
+
+/// List a directory for the file tree.
+pub fn list_directory(path: &Path) -> Result<Vec<FileEntry>, String> {
+    list_directory_in(&home()?, path)
 }
 
 pub fn read_text_file(path: &Path) -> Result<String, String> {
@@ -166,12 +172,19 @@ pub fn rename_entry(old_path: &Path, new_path: &Path) -> Result<(), String> {
     rename_entry_in(&home()?, old_path, new_path)
 }
 
-pub fn file_exists(path: &Path) -> bool {
-    path.exists()
+pub(crate) fn file_exists_in(home: &Path, path: &Path) -> bool {
+    crate::policy::ensure_readable_in(home, path).is_ok() && path.exists()
 }
 
-/// File modification time in unix seconds, 0 when unknown.
-pub fn file_mtime(path: &Path) -> Result<u64, String> {
+pub fn file_exists(path: &Path) -> bool {
+    match home() {
+        Ok(home) => file_exists_in(&home, path),
+        Err(_) => false,
+    }
+}
+
+pub(crate) fn file_mtime_in(home: &Path, path: &Path) -> Result<u64, String> {
+    crate::policy::ensure_readable_in(home, path)?;
     let meta = fs::metadata(path).map_err(|e| e.to_string())?;
     Ok(meta
         .modified()
@@ -179,4 +192,73 @@ pub fn file_mtime(path: &Path) -> Result<u64, String> {
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
         .map(|d| d.as_secs())
         .unwrap_or(0))
+}
+
+/// File modification time in unix seconds, 0 when unknown.
+pub fn file_mtime(path: &Path) -> Result<u64, String> {
+    file_mtime_in(&home()?, path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn temp_home(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("aide-files-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn metadata_commands_apply_the_path_policy() {
+        let home = temp_home("policy");
+        let outside = std::env::temp_dir().join(format!("aide-files-out-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&outside);
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("secret.txt"), "x").unwrap();
+
+        let err = list_directory_in(&home, &outside).unwrap_err();
+        assert!(err.contains("inside the home directory"), "{err}");
+        assert!(!file_exists_in(&home, &outside.join("secret.txt")));
+        assert!(file_mtime_in(&home, &outside.join("secret.txt")).is_err());
+
+        // Normal home paths still work.
+        let dir = home.join("notes");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("a.md"), "x").unwrap();
+        assert_eq!(list_directory_in(&home, &dir).unwrap().len(), 1);
+        assert!(file_exists_in(&home, &dir.join("a.md")));
+        assert!(file_mtime_in(&home, &dir.join("a.md")).is_ok());
+        let _ = fs::remove_dir_all(&home);
+        let _ = fs::remove_dir_all(&outside);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn metadata_commands_allow_symlinked_skill_folders() {
+        let home = temp_home("symlink");
+        let repo = std::env::temp_dir().join(format!("aide-files-repo-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&repo);
+        fs::create_dir_all(&repo).unwrap();
+        fs::write(
+            repo.join("SKILL.md"),
+            "---
+name: linked
+---
+",
+        )
+        .unwrap();
+        let skills = home.join(".agents/skills");
+        fs::create_dir_all(&skills).unwrap();
+        std::os::unix::fs::symlink(&repo, skills.join("linked")).unwrap();
+
+        let linked = skills.join("linked");
+        assert_eq!(list_directory_in(&home, &linked).unwrap().len(), 1);
+        assert!(file_exists_in(&home, &linked.join("SKILL.md")));
+        assert!(file_mtime_in(&home, &linked.join("SKILL.md")).is_ok());
+        let _ = fs::remove_dir_all(&home);
+        let _ = fs::remove_dir_all(&repo);
+    }
 }

@@ -2,7 +2,7 @@
 // GitHub archives. The search endpoint is the same unauthenticated one the
 // official `npx skills` CLI uses.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -49,6 +49,10 @@ pub struct SkillSource {
     /// HEAD commit of the skill's repo subtree at install/update time.
     #[serde(default)]
     pub commit: Option<String>,
+    /// Tree hash of the installed skill directory at install/update time.
+    /// Legacy records do not have it; it is computed lazily for previews.
+    #[serde(default)]
+    pub hash: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -122,6 +126,26 @@ fn cached_or_fetch_head(
         },
     );
     Ok((commit, true))
+}
+
+/// Cached HEAD lookup for a single repository/subtree, used by the update
+/// preview. Reuses the same 10-minute on-disk cache as `check_updates`.
+pub(crate) fn head_commit_cached(
+    aide_dir: &Path,
+    owner: &str,
+    repo: &str,
+    subtree: Option<&str>,
+) -> Result<String, String> {
+    let now = now_secs();
+    let mut cache = read_head_cache(aide_dir);
+    let key = head_cache_key(owner, repo, subtree);
+    let (commit, changed) = cached_or_fetch_head(&key, &mut cache, now, || {
+        latest_commit(owner, repo, subtree)
+    })?;
+    if changed {
+        let _ = write_head_cache(aide_dir, &cache);
+    }
+    Ok(commit)
 }
 
 /// Deduplicated HEAD lookups required by the recorded install sources:
@@ -320,6 +344,7 @@ pub fn record_source(
     id: &str,
     source: &str,
     commit: Option<String>,
+    hash: Option<String>,
 ) -> Result<(), String> {
     let mut map = read_sources(aide_dir)?;
     map.insert(
@@ -332,6 +357,7 @@ pub fn record_source(
                 .map(|d| d.as_secs())
                 .unwrap_or(0),
             commit,
+            hash,
         },
     );
     let backups = aide_dir.join("backups");
@@ -542,12 +568,14 @@ pub fn install_from_id(
             // leaves a partial skill behind.
             crate::fsutil::copy_dir_into_place(&src, &dest)
                 .map_err(|e| format!("Failed to install \"{name}\": {e}"))?;
+            let hash = crate::hash::tree_hash(&dest).ok();
             record_source(
                 aide_dir,
                 &name,
                 id,
                 &format!("{owner}/{repo}"),
                 head_commit.clone(),
+                hash,
             )?;
             installed.push(name);
         }
@@ -556,6 +584,151 @@ pub fn install_from_id(
 
     let _ = fs::remove_dir_all(&tmp);
     result
+}
+
+// ── Update preview ──
+
+/// What would change if the registry skill were updated to its latest commit.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SkillUpdatePreview {
+    pub skill: String,
+    pub id: String,
+    pub installed_commit: Option<String>,
+    pub latest_commit: String,
+    pub added: Vec<String>,
+    pub removed: Vec<String>,
+    pub changed: Vec<String>,
+    pub local_modified: bool,
+}
+
+/// Compare two file maps and classify the differences from the local view:
+/// `added` (upstream only), `removed` (local only), `changed` (same path,
+/// different content hash). All lists are sorted.
+pub fn diff_file_maps(
+    local: &BTreeMap<String, String>,
+    upstream: &BTreeMap<String, String>,
+) -> (Vec<String>, Vec<String>, Vec<String>) {
+    let added = upstream
+        .keys()
+        .filter(|path| !local.contains_key(*path))
+        .cloned()
+        .collect();
+    let removed = local
+        .keys()
+        .filter(|path| !upstream.contains_key(*path))
+        .cloned()
+        .collect();
+    let changed = upstream
+        .iter()
+        .filter(|(path, hash)| local.get(*path).is_some_and(|local| local != *hash))
+        .map(|(path, _)| path.clone())
+        .collect();
+    (added, removed, changed)
+}
+
+/// Was the installed copy edited since it was installed? Legacy entries without
+/// a recorded hash are treated as unmodified.
+fn is_locally_modified(recorded: Option<&String>, current: &str) -> bool {
+    recorded.is_some_and(|hash| hash != current)
+}
+
+/// Preview a registry skill update without touching the installed copy.
+pub fn preview_skill_update(skill: &str) -> Result<SkillUpdatePreview, String> {
+    preview_skill_update_in(&crate::home_dir()?, skill)
+}
+
+pub(crate) fn preview_skill_update_in(
+    home: &Path,
+    skill: &str,
+) -> Result<SkillUpdatePreview, String> {
+    let aide_dir = home.join(".aide");
+    let skills_dir = home.join(".agents").join("skills");
+    let sources = read_sources(&aide_dir)?;
+    let meta = sources
+        .get(skill)
+        .ok_or_else(|| format!("No install source recorded for \"{skill}\""))?
+        .clone();
+    let (owner, repo, only_skill) = parse_skill_id(&meta.id)?;
+    let latest_commit = head_commit_cached(&aide_dir, &owner, &repo, only_skill.as_deref())?;
+
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp = aide_dir.join("tmp").join(format!("skill-preview-{ts}"));
+    fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
+
+    let result = (|| {
+        let archive = tmp.join("repo.tar.gz");
+        download_repo_tarball(&owner, &repo, &latest_commit, &archive)?;
+        let extract_dir = tmp.join("extract");
+        fs::create_dir_all(&extract_dir).map_err(|e| e.to_string())?;
+        extract_tarball(&archive, &extract_dir)?;
+        let root = extract_root(&extract_dir)?;
+        let upstream_dir = find_upstream_skill(&root, only_skill.as_deref(), &repo, skill)?;
+        let upstream = crate::hash::file_map(&upstream_dir)?;
+
+        let installed = skills_dir.join(skill);
+        let local = if installed.is_dir() {
+            crate::hash::file_map(&installed)?
+        } else {
+            BTreeMap::new()
+        };
+        let (added, removed, changed) = diff_file_maps(&local, &upstream);
+        let current_hash = crate::hash::tree_hash_map(&local);
+        Ok(SkillUpdatePreview {
+            skill: skill.to_string(),
+            id: meta.id.clone(),
+            installed_commit: meta.commit.clone(),
+            latest_commit,
+            added,
+            removed,
+            changed,
+            local_modified: is_locally_modified(meta.hash.as_ref(), &current_hash),
+        })
+    })();
+
+    let _ = fs::remove_dir_all(&tmp);
+    result
+}
+
+/// Locate the folder inside the downloaded repository that corresponds to the
+/// installed skill: the requested id segment, the installed folder name, the
+/// frontmatter name, or the derived destination name.
+fn find_upstream_skill(
+    root: &Path,
+    only_skill: Option<&str>,
+    repo: &str,
+    installed: &str,
+) -> Result<PathBuf, String> {
+    let candidates = discover_skill_dirs(root);
+    if candidates.is_empty() {
+        return Err(format!("No skill folder found in {repo}"));
+    }
+    for candidate in &candidates {
+        if let Some(segment) = only_skill {
+            if dir_matches_skill(candidate, segment) {
+                return Ok(candidate.clone());
+            }
+        }
+        let dir_name = candidate
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if dir_name == installed {
+            return Ok(candidate.clone());
+        }
+        if crate::skills::skill_frontmatter_name(candidate).as_deref() == Some(installed) {
+            return Ok(candidate.clone());
+        }
+        if skill_dest_name(candidate, only_skill, repo).ok().as_deref() == Some(installed) {
+            return Ok(candidate.clone());
+        }
+    }
+    if candidates.len() == 1 {
+        return Ok(candidates[0].clone());
+    }
+    Err(format!("Cannot locate skill \"{installed}\" in {repo}"))
 }
 
 // ── Default-home helpers ──
@@ -655,6 +828,7 @@ mod tests {
             "owner/repo/my-skill",
             "owner/repo",
             Some("abc".into()),
+            None,
         )
         .unwrap();
         let map = read_sources(&base).unwrap();
@@ -795,6 +969,82 @@ mod tests {
     }
 
     #[test]
+    fn diff_file_maps_classifies_added_removed_and_changed() {
+        let local = BTreeMap::from([
+            ("SKILL.md".to_string(), "local-skill".to_string()),
+            ("removed.txt".to_string(), "bye".to_string()),
+            ("same.txt".to_string(), "same".to_string()),
+        ]);
+        let upstream = BTreeMap::from([
+            ("SKILL.md".to_string(), "upstream-skill".to_string()),
+            ("added.txt".to_string(), "hi".to_string()),
+            ("same.txt".to_string(), "same".to_string()),
+        ]);
+        let (added, removed, changed) = diff_file_maps(&local, &upstream);
+        assert_eq!(added, vec!["added.txt".to_string()]);
+        assert_eq!(removed, vec!["removed.txt".to_string()]);
+        assert_eq!(changed, vec!["SKILL.md".to_string()]);
+        assert!(diff_file_maps(&upstream, &upstream).0.is_empty());
+    }
+
+    #[test]
+    fn local_modified_uses_the_recorded_tree_hash() {
+        let current = crate::hash::sha256_hex(b"installed");
+        assert!(!is_locally_modified(None, &current)); // legacy entry
+        assert!(!is_locally_modified(Some(&current), &current));
+        let recorded = crate::hash::sha256_hex(b"other");
+        assert!(is_locally_modified(Some(&recorded), &current));
+    }
+
+    #[test]
+    fn preview_serializes_the_agreed_shape() {
+        let preview = SkillUpdatePreview {
+            skill: "demo".into(),
+            id: "owner/repo/demo".into(),
+            installed_commit: Some("abc".into()),
+            latest_commit: "def".into(),
+            added: vec!["a.txt".into()],
+            removed: vec!["b.txt".into()],
+            changed: vec!["SKILL.md".into()],
+            local_modified: true,
+        };
+        let value = serde_json::to_value(&preview).unwrap();
+        let mut keys: Vec<&str> = value
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "added",
+                "changed",
+                "id",
+                "installed_commit",
+                "latest_commit",
+                "local_modified",
+                "removed",
+                "skill"
+            ]
+        );
+        assert_eq!(value["installed_commit"], "abc");
+        assert_eq!(value["local_modified"], true);
+    }
+
+    #[test]
+    fn preview_requires_a_recorded_install_source() {
+        let home = std::env::temp_dir().join(format!("aide-preview-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&home);
+        fs::create_dir_all(home.join(".aide")).unwrap();
+        fs::create_dir_all(home.join(".agents/skills")).unwrap();
+        let err = preview_skill_update_in(&home, "ghost").unwrap_err();
+        assert!(err.contains("No install source recorded"), "{err}");
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
     fn urlencode_encodes_specials() {
         assert_eq!(urlencode("react native"), "react%20native");
         assert_eq!(urlencode("a-b_c.d~e"), "a-b_c.d~e");
@@ -817,6 +1067,7 @@ mod tests {
                     source: "owner/repo".to_string(),
                     installed_at: 0,
                     commit: Some("sha".to_string()),
+                    hash: None,
                 },
             );
         }
@@ -828,6 +1079,7 @@ mod tests {
                 source: "local".to_string(),
                 installed_at: 0,
                 commit: None,
+                hash: None,
             },
         );
         let targets = update_targets(&sources);

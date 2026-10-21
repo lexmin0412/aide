@@ -887,7 +887,8 @@ pub fn import_local_skill(source: &str) -> Result<String, String> {
     let name = import_skill_into(Path::new(source), &skills_dir)?;
     if let Some(home) = dirs::home_dir() {
         // Record where the skill came from so provenance is visible in the UI.
-        let _ = crate::registry::record_source(&home.join(".aide"), &name, source, "local", None);
+        let _ =
+            crate::registry::record_source(&home.join(".aide"), &name, source, "local", None, None);
     }
     Ok(name)
 }

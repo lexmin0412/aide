@@ -12,7 +12,7 @@ use serde::Serialize;
 
 use aide_core::mcp::{ImportResult, McpDrift, McpServerView, McpSyncResult, McpToolView};
 use aide_core::project::{ProjectConfig, ProjectStatus, ProjectSyncResult};
-use aide_core::{audit, files, git_sync, mcp, models, project, registry, skills};
+use aide_core::{audit, files, git_sync, mcp, models, project, registry, skills, snapshot};
 use aide_core::{FileEntry, SkillInfo, SkillSearchMatch, SyncResult, ToolInfo};
 
 // ── Skills ──
@@ -68,6 +68,13 @@ fn update_skill(skill: String) -> Result<registry::RemoteInstallResult, String> 
     result
 }
 
+/// Preview what installing the latest upstream commit would change. Async
+/// because it resolves the HEAD commit and downloads a tarball.
+#[tauri::command(async)]
+fn preview_skill_update(skill: String) -> Result<registry::SkillUpdatePreview, String> {
+    registry::preview_skill_update(&skill)
+}
+
 #[tauri::command(async)]
 fn search_skills(query: String) -> Result<Vec<SkillSearchMatch>, String> {
     Ok(skills::search_skills(&query))
@@ -105,6 +112,28 @@ fn get_project_status(project_path: String) -> Result<ProjectStatus, String> {
 #[tauri::command(async)]
 fn sync_project(project_path: String) -> Result<ProjectSyncResult, String> {
     project::sync_project(Path::new(&project_path))
+}
+
+// ── Environment snapshots ──
+
+#[tauri::command(async)]
+fn create_snapshot(label: Option<String>) -> Result<snapshot::SnapshotMeta, String> {
+    snapshot::create_snapshot(label.as_deref())
+}
+
+#[tauri::command(async)]
+fn list_snapshots() -> Result<Vec<snapshot::SnapshotMeta>, String> {
+    snapshot::list_snapshots()
+}
+
+#[tauri::command(async)]
+fn restore_snapshot(id: String) -> Result<snapshot::RestoreResult, String> {
+    snapshot::restore_snapshot(&id)
+}
+
+#[tauri::command(async)]
+fn delete_snapshot(id: String) -> Result<(), String> {
+    snapshot::delete_snapshot(&id)
 }
 
 // ── File-editing commands (path policy lives in aide-core) ──
@@ -267,14 +296,28 @@ fn set_skill_scope(skill: String, scope: Option<String>) -> Result<(), String> {
     git_sync::set_skill_scope(&skill, scope.as_deref())
 }
 
+/// Audit detail for a scope operation: scope name and outcome, never tokens.
+fn scope_audit_details<T>(scope: &str, result: &Result<T, String>) -> serde_json::Value {
+    serde_json::json!({
+        "source": "gui",
+        "scope": scope,
+        "ok": result.is_ok(),
+        "error": result.as_ref().err(),
+    })
+}
+
 #[tauri::command(async)]
 fn publish_scope(scope: String) -> Result<git_sync::PublishOutcome, String> {
-    git_sync::publish_default(&scope)
+    let result = git_sync::publish_default(&scope);
+    audit::record("publish_scope", scope_audit_details(&scope, &result));
+    result
 }
 
 #[tauri::command(async)]
 fn pull_scope(scope: String) -> Result<git_sync::PullOutcome, String> {
-    git_sync::pull_default(&scope)
+    let result = git_sync::pull_default(&scope);
+    audit::record("pull_scope", scope_audit_details(&scope, &result));
+    result
 }
 
 // ── Agent access (sidecar registration) ──
@@ -352,6 +395,7 @@ pub fn run() {
             check_sync_statuses,
             check_skill_updates,
             update_skill,
+            preview_skill_update,
             get_agent_server,
             enable_agent_access,
             list_model_providers,
@@ -387,6 +431,10 @@ pub fn run() {
             save_project_config,
             get_project_status,
             sync_project,
+            create_snapshot,
+            list_snapshots,
+            restore_snapshot,
+            delete_snapshot,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -395,6 +443,22 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scope_audit_details_never_contain_secrets() {
+        let ok: Result<i32, String> = Ok(1);
+        let details = scope_audit_details("personal", &ok);
+        assert_eq!(details["source"], "gui");
+        assert_eq!(details["scope"], "personal");
+        assert_eq!(details["ok"], true);
+        assert!(details["error"].is_null());
+
+        let failed: Result<i32, String> = Err("push failed".into());
+        let details = scope_audit_details("work", &failed);
+        assert_eq!(details["scope"], "work");
+        assert_eq!(details["ok"], false);
+        assert_eq!(details["error"], "push failed");
+    }
 
     #[test]
     fn agent_server_status_keeps_its_json_contract() {
