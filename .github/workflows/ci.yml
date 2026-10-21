@@ -71,7 +71,12 @@ jobs:
       - name: Clippy (app + core)
         run: |
           cargo clippy --manifest-path src-tauri/Cargo.toml --lib --no-deps -- -D warnings
-          cargo clippy --manifest-path src-tauri/core/Cargo.toml --lib --no-deps -- -D warnings
+          cargo clippy --manifest-path src-tauri/core/Cargo.toml --lib --bins --no-deps -- -D warnings
+
+      - name: Build script targets (app + sidecar)
+        run: |
+          cargo check --manifest-path src-tauri/Cargo.toml --bins
+          cargo check --manifest-path src-tauri/core/Cargo.toml --bins
 
       - name: Test (app + core)
         run: |

@@ -9,6 +9,10 @@ authors = ["you"]
 name = "aide_core"
 path = "src/lib.rs"
 
+[[bin]]
+name = "aide-mcp"
+path = "src/bin/aide-mcp.rs"
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

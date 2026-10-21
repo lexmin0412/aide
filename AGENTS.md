@@ -73,11 +73,11 @@ src-tauri/
 │       ├── registry.rs    # skills.sh registry search + GitHub install
 │       ├── git_sync.rs    # Scoped git backup/share (publish/pull per remote)
 │       ├── models.rs      # Model profiles + models.dev registry + per-tool sync
-│       └── mcp.rs         # Central MCP config, managed manifest, tool adapters, drift
+│       ├── mcp.rs         # Central MCP config, managed manifest, tool adapters, drift
+│       └── bin/aide-mcp.rs # MCP stdio server + CLI sidecar (this crate only, no Tauri)
 └── src/
     ├── lib.rs             # Thin #[tauri::command] layer (55 commands) delegating to aide-core
-    ├── main.rs            # Entry point
-    └── bin/aide-mcp.rs    # MCP stdio server + CLI (links aide-core only, no Tauri)
+    └── main.rs            # Entry point
 ```
 
 ## Rust Commands (src-tauri/src/lib.rs)
@@ -212,6 +212,6 @@ crate, hence the duplicated gates above.
 - **Editor theme**: follows the app theme (oneDark in dark mode, palette-driven light theme via CSS variables)
 - **Brand**: indigo accent on primary actions/rings/links (`--primary`/`--ring`); header logo + app icon share the 2x2 module-grid mark
 - **Model management**: profiles in ~/.aide/models.json (0600) pair a models.dev provider with an API key, optional base URL and model selection; sync targets are only the tools with file-based model config (claude_code settings.json env for anthropic/protocol proxies, opencode provider section, codex config.toml model_providers with env_key); other targets report unsupported
-- **Agent access**: aide bundles an `aide-mcp` sidecar (src/bin/aide-mcp.rs) that is both an MCP stdio server (9 skill-domain tools: list/search/search-registry/install/check-updates/update/sync/publish/pull) and a human CLI; enabling agent access registers it in the central MCP config, synced to tools like any other server. `get_agent_server` only reports enabled when the registered command still points at the running binary. Registry installs record the upstream commit so `check_skill_updates` can detect upstream changes via the GitHub API
+- **Agent access**: aide bundles an `aide-mcp` sidecar (src-tauri/core/src/bin/aide-mcp.rs) that is both an MCP stdio server (9 skill-domain tools: list/search/search-registry/install/check-updates/update/sync/publish/pull) and a human CLI; enabling agent access registers it in the central MCP config, synced to tools like any other server. `get_agent_server` only reports enabled when the registered command still points at the running binary. Registry installs record the upstream commit so `check_skill_updates` can detect upstream changes via the GitHub API
 - **Git backup**: scopes in ~/.aide/remotes.json map skills to separate remotes (personal vs company repos stay isolated). Canonical skills are never restructured; each scope keeps a mirrored worktree in ~/.aide/scopes/<scope>. Publish refuses empty scopes (would clear the remote), only manages skill directories (README/.github survive), and rescues skills pushed by teammates back into the central store; Pull = ff-only + remote-wins write-back limited to the scope's own skills, never deletes local-only skills. Git is resolved once (`AIDE_GIT_BIN` → PATH → Homebrew/usr paths) so Finder-launched apps work; remote URLs and branch refs are validated, and `--` guards keep user input out of option position. Pending: chunked progress for long git runs
 - Port: 1430 (Vite) / 1431 (HMR)

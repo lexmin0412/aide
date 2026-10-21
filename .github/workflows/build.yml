@@ -48,7 +48,10 @@ jobs:
         shell: bash
         run: |
           TRIPLE=$(rustc -vV | sed -n 's/host: //p')
-          cargo build --release --bin aide-mcp --manifest-path src-tauri/Cargo.toml
+          # The sidecar lives in aide-core, which has no Tauri dependency: build
+          # it directly so the app's externalBin resource is produced before
+          # `pnpm tauri build` runs.
+          cargo build --release --bin aide-mcp --manifest-path src-tauri/core/Cargo.toml
           mkdir -p src-tauri/binaries
           EXT=""
           if [ "$RUNNER_OS" = "Windows" ]; then EXT=".exe"; fi
