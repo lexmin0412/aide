@@ -48,13 +48,12 @@ export function SearchSelect({
     }
   }, [open])
 
-  useEffect(() => {
-    if (open) {
-      setFilter("")
-      setIndex(0)
-      requestAnimationFrame(() => inputRef.current?.focus())
-    }
-  }, [open])
+  const openMenu = () => {
+    setFilter("")
+    setIndex(0)
+    setOpen(true)
+    requestAnimationFrame(() => inputRef.current?.focus())
+  }
 
   const filtered = useMemo(() => {
     const q = filter.trim().toLowerCase()
@@ -67,9 +66,9 @@ export function SearchSelect({
     )
   }, [options, filter])
 
-  useEffect(() => {
-    setIndex((prev) => Math.min(prev, Math.max(0, filtered.length - 1)))
-  }, [filtered.length])
+  // Derived instead of an effect: the highlight must never point past the end
+  // of the current filter results.
+  const activeIndex = Math.min(index, Math.max(0, filtered.length - 1))
 
   const selected = options.find((o) => o.value === value)
 
@@ -78,7 +77,10 @@ export function SearchSelect({
       <button
         type="button"
         className="h-8 w-full rounded-lg border border-input bg-transparent px-2 text-xs text-left flex items-center justify-between gap-1 hover:border-primary/40 transition-colors"
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => {
+          if (open) setOpen(false)
+          else openMenu()
+        }}
       >
         <span className={`truncate ${selected ? "" : "text-muted-foreground"}`}>
           {selected?.label ?? placeholder}
@@ -96,13 +98,13 @@ export function SearchSelect({
               onKeyDown={(e) => {
                 if (e.key === "ArrowDown") {
                   e.preventDefault()
-                  setIndex((i) => Math.min(i + 1, filtered.length - 1))
+                  setIndex(Math.min(activeIndex + 1, filtered.length - 1))
                 } else if (e.key === "ArrowUp") {
                   e.preventDefault()
-                  setIndex((i) => Math.max(i - 1, 0))
+                  setIndex(Math.max(activeIndex - 1, 0))
                 } else if (e.key === "Enter") {
                   e.preventDefault()
-                  const opt = filtered[index]
+                  const opt = filtered[activeIndex]
                   if (opt) {
                     onChange(opt.value)
                     setOpen(false)
@@ -122,7 +124,7 @@ export function SearchSelect({
                   type="button"
                   key={o.value}
                   className={`w-full text-left px-2 py-1.5 rounded-md text-xs flex items-center justify-between gap-2 ${
-                    i === index ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"
+                    i === activeIndex ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"
                   }`}
                   onClick={() => {
                     onChange(o.value)

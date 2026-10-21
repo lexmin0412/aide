@@ -34,28 +34,26 @@ export default tseslint.config(
   {
     files: ["**/*.{ts,tsx}"],
     rules: {
-      // Hooks correctness is a blocking error.
+      // Hooks correctness is blocking. The compiler-oriented checks
+      // (react-hooks v7) are blocking too: the codebase was cleaned up so
+      // refs are only touched in effects/handlers, effects only update state
+      // after awaits, and manual memoization is preserved.
       "react-hooks/rules-of-hooks": "error",
-
-      // The rules below cannot pass on the current codebase yet. They are kept
-      // as warnings so CI stays green while the violations are burned down;
-      // promote each one back to "error" once its count hits zero.
-      // (react-hooks v7 added the compiler-oriented checks.)
-      "react-hooks/exhaustive-deps": "warn",
-      "react-hooks/refs": "warn",
-      "react-hooks/set-state-in-effect": "warn",
-      "react-hooks/preserve-manual-memoization": "warn",
-      // Intentional empty catch/finally blocks exist in the IPC/probing paths.
-      "no-empty": "warn",
-      // `any` is still used in a few Tauri IPC boundaries.
-      "@typescript-eslint/no-explicit-any": "warn",
-      // jsx-a11y: recommended stays on, but these rules fire on existing
-      // clickable-div / autofocus patterns and are downgraded until the
-      // components are reworked.
-      "jsx-a11y/no-static-element-interactions": "warn",
-      "jsx-a11y/click-events-have-key-events": "warn",
-      "jsx-a11y/no-autofocus": "warn",
-      "jsx-a11y/no-noninteractive-tabindex": "warn",
+      "react-hooks/exhaustive-deps": "error",
+      "react-hooks/refs": "error",
+      "react-hooks/set-state-in-effect": "error",
+      "react-hooks/preserve-manual-memoization": "error",
+      // Empty catch blocks must carry an explanatory comment.
+      "no-empty": "error",
+      // Tauri IPC boundaries are typed; `any` is no longer needed.
+      "@typescript-eslint/no-explicit-any": "error",
+      // Accessibility: clickable elements need semantic roles and keyboard
+      // handlers, autofocus is avoided, and tabIndex stays on interactive
+      // elements only.
+      "jsx-a11y/no-static-element-interactions": "error",
+      "jsx-a11y/click-events-have-key-events": "error",
+      "jsx-a11y/no-autofocus": "error",
+      "jsx-a11y/no-noninteractive-tabindex": "error",
     },
   },
 );

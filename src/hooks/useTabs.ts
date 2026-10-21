@@ -38,10 +38,15 @@ export function useTabs(options?: { active?: boolean }) {
   const handleSaveRef = useRef<(path: string) => Promise<boolean>>(async () => false)
 
   // Latest state for callbacks that stay identity-stable (shortcuts, guards).
+  // Synced in effects so refs are never written during render.
   const tabsRef = useRef(tabs)
-  tabsRef.current = tabs
   const activeTabPathRef = useRef(activeTabPath)
-  activeTabPathRef.current = activeTabPath
+  useEffect(() => {
+    tabsRef.current = tabs
+  }, [tabs])
+  useEffect(() => {
+    activeTabPathRef.current = activeTabPath
+  }, [activeTabPath])
 
   /** Live document for a tab: mounted editor first, flushed snapshot second. */
   const readLiveDoc = useCallback((tab: EditorTab): string => {
@@ -98,7 +103,9 @@ export function useTabs(options?: { active?: boolean }) {
                 : t
             )
           )
-        } catch {}
+        } catch {
+          // Reloading in place is best-effort: keep the open tab's content.
+        }
         return
       }
       try {
@@ -152,7 +159,9 @@ export function useTabs(options?: { active?: boolean }) {
     },
     [readLiveDoc, saveTab]
   )
-  handleSaveRef.current = handleSave
+  useEffect(() => {
+    handleSaveRef.current = handleSave
+  }, [handleSave])
 
   const resolvePendingClose = useCallback(
     async (save: boolean) => {
@@ -194,7 +203,9 @@ export function useTabs(options?: { active?: boolean }) {
               : t
           )
         )
-      } catch {}
+      } catch {
+        // Keep the current content when the mtime/read probe fails.
+      }
     },
     [flushTabDoc]
   )
@@ -211,7 +222,9 @@ export function useTabs(options?: { active?: boolean }) {
               : t
           )
         )
-      } catch {}
+      } catch {
+        // Skip files that disappeared or became unreadable during refresh.
+      }
     }
   }, [])
 

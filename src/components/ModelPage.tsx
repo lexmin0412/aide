@@ -63,18 +63,28 @@ export default function ModelPage() {
   const [syncing, setSyncing] = useState<string | null>(null)
   const [results, setResults] = useState<Record<string, ModelSyncResult[]>>({})
 
-  const load = () => {
-    return Promise.all([
-      invoke<ModelProfilesConfig>("list_model_profiles").then((p) => setProfiles(p.profiles ?? [])),
-      invoke<ProviderSummary[]>("list_model_providers", { force: false }).then(setProviders),
-    ])
-  }
-
   useEffect(() => {
-    load()
-      .catch((e) => toast(t("models.loadFailed", { error: String(e) }), "error"))
-      .finally(() => setLoading(false))
-  }, [])
+    let cancelled = false
+    const init = async () => {
+      try {
+        const [config, providerList] = await Promise.all([
+          invoke<ModelProfilesConfig>("list_model_profiles"),
+          invoke<ProviderSummary[]>("list_model_providers", { force: false }),
+        ])
+        if (cancelled) return
+        setProfiles(config.profiles ?? [])
+        setProviders(providerList)
+      } catch (e) {
+        if (!cancelled) toast(t("models.loadFailed", { error: String(e) }), "error")
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    void init()
+    return () => {
+      cancelled = true
+    }
+  }, [t])
 
   const saveProfiles = async (next: ModelProfile[]) => {
     await invoke("save_model_profiles", { config: { profiles: next } })

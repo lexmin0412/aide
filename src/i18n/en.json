@@ -9,7 +9,9 @@
     "retry": "Retry",
     "refresh": "Refresh",
     "enable": "Enable",
-    "disable": "Disable"
+    "disable": "Disable",
+    "tabs": "Open tabs",
+    "resizeSidebar": "Resize sidebar"
   },
   "nav": {
     "skills": "Skills",
@@ -104,7 +106,8 @@
     "installFailed": "Install failed: {{error}}",
     "updatedToast": "Updated: {{names}}",
     "updateFailed": "Update failed: {{error}}",
-    "registrySearchFailed": "Registry search failed: {{error}}"
+    "registrySearchFailed": "Registry search failed: {{error}}",
+    "openSite": "Open site"
   },
   "git": {
     "title": "Git Backup & Share",
@@ -313,7 +316,9 @@
     "createFolderFailed": "Failed to create folder: {{error}}",
     "deleteFailed": "Failed to delete: {{error}}",
     "revealFailed": "Failed to reveal: {{error}}",
-    "alreadyExists": "\"{{name}}\" already exists"
+    "alreadyExists": "\"{{name}}\" already exists",
+    "tree": "File tree",
+    "menu": "File actions"
   },
   "tags": {
     "addPlaceholder": "Add tag...",

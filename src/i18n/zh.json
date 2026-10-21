@@ -9,7 +9,9 @@
     "retry": "重试",
     "refresh": "刷新",
     "enable": "启用",
-    "disable": "禁用"
+    "disable": "禁用",
+    "tabs": "已打开标签页",
+    "resizeSidebar": "调整侧边栏宽度"
   },
   "nav": {
     "skills": "技能",
@@ -104,7 +106,8 @@
     "installFailed": "安装失败：{{error}}",
     "updatedToast": "已更新：{{names}}",
     "updateFailed": "更新失败：{{error}}",
-    "registrySearchFailed": "注册表搜索失败：{{error}}"
+    "registrySearchFailed": "注册表搜索失败：{{error}}",
+    "openSite": "打开网站"
   },
   "git": {
     "title": "Git 备份与共享",
@@ -313,7 +316,9 @@
     "createFolderFailed": "创建文件夹失败：{{error}}",
     "deleteFailed": "删除失败：{{error}}",
     "revealFailed": "显示失败：{{error}}",
-    "alreadyExists": "\"{{name}}\" 已存在"
+    "alreadyExists": "\"{{name}}\" 已存在",
+    "tree": "文件树",
+    "menu": "文件操作"
   },
   "tags": {
     "addPlaceholder": "添加标签...",

@@ -3,6 +3,7 @@ import type { SkillInfo } from "../types"
 import { TagEditor } from "./TagEditor"
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover"
 import { memo, useState } from "react"
+import { isActivationKey } from "@/lib/a11y"
 
 interface SkillCardProps {
   skill: SkillInfo
@@ -17,8 +18,18 @@ export const SkillCard = memo(function SkillCard({ skill, allTags, onClick, onTa
 
   return (
     <div
+      role="button"
+      tabIndex={0}
+      aria-label={skill.display_name}
       onClick={() => onClick(skill)}
-      className="group bg-card border border-border rounded-xl p-5 cursor-pointer transition-all hover:border-primary/40 hover:bg-card/80 hover:shadow-[0_2px_12px_-4px] hover:shadow-primary/15 flex flex-col gap-2.5 min-h-[140px] relative"
+      onKeyDown={(e) => {
+        // Ignore keys bubbling from the nested tag button.
+        if (e.target !== e.currentTarget) return
+        if (!isActivationKey(e.key)) return
+        e.preventDefault()
+        onClick(skill)
+      }}
+      className="group bg-card border border-border rounded-xl p-5 cursor-pointer transition-all hover:border-primary/40 hover:bg-card/80 hover:shadow-[0_2px_12px_-4px] hover:shadow-primary/15 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring flex flex-col gap-2.5 min-h-[140px] relative"
     >
       <div className="flex items-center gap-2">
         <span className="text-base text-primary/80">{skill.is_symlink ? "↗" : "◆"}</span>
@@ -40,10 +51,14 @@ export const SkillCard = memo(function SkillCard({ skill, allTags, onClick, onTa
             {skill.scope}
           </span>
         )}
-        <span className="ml-auto relative" onClick={(e) => e.stopPropagation()}>
+        <span className="ml-auto relative">
           <Popover open={showTagEditor} onOpenChange={setShowTagEditor}>
             <PopoverTrigger asChild>
-              <button className="flex gap-1 max-w-[160px]">
+              <button
+                className="flex gap-1 max-w-[160px]"
+                aria-expanded={showTagEditor}
+                onClick={(e) => e.stopPropagation()}
+              >
                 {skill.tags.length > 0 ? (
                   <>
                     {skill.tags.slice(0, 3).map((t) => (

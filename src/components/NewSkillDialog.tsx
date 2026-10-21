@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { invoke } from "@tauri-apps/api/core"
 import {
   Dialog,
@@ -35,6 +35,14 @@ export function NewSkillDialog({ open, onClose, onCreated }: NewSkillDialogProps
   const [description, setDescription] = useState("")
   const [tags, setTags] = useState("")
   const [creating, setCreating] = useState(false)
+  const nameRef = useRef<HTMLInputElement>(null)
+
+  // Focus the name field when the dialog opens (instead of the autoFocus prop).
+  useEffect(() => {
+    if (!open) return
+    const frame = requestAnimationFrame(() => nameRef.current?.focus())
+    return () => cancelAnimationFrame(frame)
+  }, [open])
 
   const dirName = toDirName(name)
   const invalid = name.trim().length > 0 && dirName.length === 0
@@ -95,10 +103,10 @@ export function NewSkillDialog({ open, onClose, onCreated }: NewSkillDialogProps
           <div className="space-y-1">
             <Label>{t("newSkill.name")}</Label>
             <Input
+              ref={nameRef}
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder={t("newSkill.namePlaceholder")}
-              autoFocus
               onKeyDown={(e) => { if (e.key === "Enter") void create() }}
             />
             {dirName && <p className="text-[10px] text-muted-foreground font-mono">{t("newSkill.folder", { name: dirName })}</p>}

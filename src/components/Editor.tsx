@@ -1,4 +1,4 @@
-import { useEffect, useRef, useMemo, useState, useCallback } from "react"
+import { useEffect, useRef, useMemo, useState } from "react"
 import { EditorView, keymap } from "@codemirror/view"
 import { EditorState, Compartment, type Extension } from "@codemirror/state"
 import { basicSetup } from "codemirror"
@@ -132,15 +132,18 @@ function TextViewer({ tab, onDirtyChange, onSave, registerDocSource }: EditorPro
   // Set while dispatching a programmatic (external) document replacement so the
   // update listener does not mistake it for a user edit.
   const applyingExternalRef = useRef(false)
-  const tabRef = useRef(tab)
-  tabRef.current = tab
-  const [preview, setPreview] = useState(false)
+  const [previewPath, setPreviewPath] = useState<string | null>(null)
   const [previewContent, setPreviewContent] = useState("")
   const { t } = useTranslation()
   const [isDark, setIsDark] = useState(() => document.documentElement.classList.contains("dark"))
-  onDirtyChangeRef.current = onDirtyChange
-  onSaveRef.current = onSave
-  registerDocSourceRef.current = registerDocSource
+
+  // Callback refs are synced in an effect (never during render) so the
+  // CodeMirror extensions created for a mount never hold stale closures.
+  useEffect(() => {
+    onDirtyChangeRef.current = onDirtyChange
+    onSaveRef.current = onSave
+    registerDocSourceRef.current = registerDocSource
+  })
 
   useEffect(() => {
     const observer = new MutationObserver(() => {
@@ -152,14 +155,29 @@ function TextViewer({ tab, onDirtyChange, onSave, registerDocSource }: EditorPro
 
   const isMarkdown = isMarkdownFile(tab.name)
   const readonly = !tab.path.match(/\.(md|json|jsonc|yaml|yml|toml|txt|js|ts|jsx|tsx|css|html|sh|env)$/)
+  const preview = previewPath === tab.path
 
-  const extensions = useMemo(() => {
-    const exts = detectExtensions(tab.name, readonly)
-    exts.push(isDark ? oneDark : lightTheme)
-    if (isDark) exts.push(darkBlendTheme)
+  // Create/reuse the view. The parked state for this path is authoritative for
+  // an open tab (it may be newer than tab.content), so edits survive switching.
+  useEffect(() => {
+    if (!editorRef.current) return
+
+    const cacheKey = stateCacheKey(tab.path, isDark, tab.rev)
+    const cached = getCachedState(cacheKey)
+    let baseDoc = tab.content
+    if (!cached && tab.is_dirty) {
+      // Theme switch / revision mismatch: fall back to the newest parked doc
+      // instead of the lagging tab.content snapshot.
+      const parked = getLatestStateForPath(tab.path)
+      if (parked) baseDoc = parked.doc.toString()
+    }
+
+    const extensions = detectExtensions(tab.name, readonly)
+    extensions.push(isDark ? oneDark : lightTheme)
+    if (isDark) extensions.push(darkBlendTheme)
 
     if (!readonly) {
-      exts.push(
+      extensions.push(
         keymap.of([
           {
             key: "Mod-s",
@@ -175,7 +193,7 @@ function TextViewer({ tab, onDirtyChange, onSave, registerDocSource }: EditorPro
     }
 
     // Dirty channel: cheap, fires at most once per dirty episode.
-    exts.push(
+    extensions.push(
       EditorView.updateListener.of((update) => {
         if (!update.docChanged || applyingExternalRef.current) return
         if (dirtyReportedRef.current) return
@@ -184,30 +202,12 @@ function TextViewer({ tab, onDirtyChange, onSave, registerDocSource }: EditorPro
       })
     )
 
-    return exts
-  }, [tab.name, tab.path, readonly, isDark])
-
-  // Create/reuse the view. The parked state for this path is authoritative for
-  // an open tab (it may be newer than tab.content), so edits survive switching.
-  useEffect(() => {
-    if (!editorRef.current) return
-
-    const currentTab = tabRef.current
-    const cacheKey = stateCacheKey(currentTab.path, isDark, currentTab.rev)
-    const cached = getCachedState(cacheKey)
-    let baseDoc = currentTab.content
-    if (!cached && currentTab.is_dirty) {
-      // Theme switch / revision mismatch: fall back to the newest parked doc
-      // instead of the lagging tab.content snapshot.
-      const parked = getLatestStateForPath(currentTab.path)
-      if (parked) baseDoc = parked.doc.toString()
-    }
     const state = cached ?? EditorState.create({ doc: baseDoc, extensions })
 
     const view = new EditorView({ state, parent: editorRef.current })
     viewRef.current = view
-    dirtyReportedRef.current = currentTab.is_dirty
-    registerDocSourceRef.current(currentTab.path, () => viewRef.current?.state.doc.toString())
+    dirtyReportedRef.current = tab.is_dirty
+    registerDocSourceRef.current(tab.path, () => viewRef.current?.state.doc.toString())
 
     // File types without a statically-known grammar (js, ts, css, yaml, sh,
     // toml, ...) are resolved by filename and imported on demand.
@@ -222,21 +222,24 @@ function TextViewer({ tab, onDirtyChange, onSave, registerDocSource }: EditorPro
               view.dispatch({ effects: languageCompartment.reconfigure(support) })
             }
           })
-          .catch(() => {})
+          .catch(() => {
+            // Lazy grammar load failed: keep the plain-text editor.
+          })
       }
     }
 
     return () => {
       cancelled = true
-      registerDocSourceRef.current(currentTab.path, null)
-      setCachedState(cacheKey, currentTab.path, view.state)
+      registerDocSourceRef.current(tab.path, null)
+      setCachedState(cacheKey, tab.path, view.state)
       view.destroy()
       viewRef.current = null
     }
-    // Content/dirty changes are handled by the effects below, through tabRef,
-    // so re-creating the view on them would drop focus and undo history.
+    // tab.content / tab.is_dirty are read as a mount snapshot only: the effects
+    // below handle later content/dirty changes, and re-creating the view on them
+    // would drop focus and undo history.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab.path, tab.rev, isDark, extensions])
+  }, [tab.path, tab.rev, tab.name, isDark, readonly])
 
   // External content replacement (mtime reload, save completion): mirror it into
   // the mounted view when they diverge.
@@ -263,11 +266,6 @@ function TextViewer({ tab, onDirtyChange, onSave, registerDocSource }: EditorPro
     if (!tab.is_dirty) dirtyReportedRef.current = false
   }, [tab.is_dirty, tab.path])
 
-  // Switching files always starts in edit mode.
-  useEffect(() => {
-    setPreview(false)
-  }, [tab.path])
-
   // Keep Cmd+S working while the markdown preview is visible (the CodeMirror
   // keymap only fires when the editor is focused). The view stays mounted, so
   // the hook reads the live document.
@@ -292,11 +290,11 @@ function TextViewer({ tab, onDirtyChange, onSave, registerDocSource }: EditorPro
     return () => cancelAnimationFrame(frame)
   }, [preview])
 
-  const showPreview = useCallback(() => {
+  const showPreview = () => {
     const view = viewRef.current
     setPreviewContent(view ? view.state.doc.toString() : tab.content)
-    setPreview(true)
-  }, [tab.content])
+    setPreviewPath(tab.path)
+  }
 
   return (
     <div className="editor-container h-full flex flex-col relative">
@@ -305,13 +303,17 @@ function TextViewer({ tab, onDirtyChange, onSave, registerDocSource }: EditorPro
           <button
             className={`p-1 rounded ${!preview ? "bg-secondary text-foreground" : "text-muted-foreground hover:text-foreground"}`}
             title={t("editor.edit")}
-            onClick={() => setPreview(false)}
+            aria-label={t("editor.edit")}
+            aria-pressed={!preview}
+            onClick={() => setPreviewPath(null)}
           >
             <Code size={13} />
           </button>
           <button
             className={`p-1 rounded ${preview ? "bg-secondary text-foreground" : "text-muted-foreground hover:text-foreground"}`}
             title={t("editor.preview")}
+            aria-label={t("editor.preview")}
+            aria-pressed={preview}
             onClick={showPreview}
           >
             <Eye size={13} />

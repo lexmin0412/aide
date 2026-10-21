@@ -13,6 +13,8 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { toast } from "@/lib/toast"
+import { isActivationKey } from "@/lib/a11y"
+import { parseExpandedDirs, treeExpandedStorageKey } from "@/lib/fileTreeState"
 import { useTranslation } from "react-i18next"
 import type { FileEntry } from "../types"
 
@@ -70,27 +72,28 @@ function InlineEditInput({
   onCommit: (name: string) => void
   onCancel: () => void
 }) {
-  const inputRef = useRef<HTMLInputElement>(null)
   const [val, setVal] = useState(initialValue)
 
-  useEffect(() => {
-    const el = inputRef.current
-    if (!el) return
-    el.focus()
-    if (rename) {
-      const dotIndex = initialValue.lastIndexOf(".")
-      if (dotIndex > 0) el.setSelectionRange(0, dotIndex)
-      else el.select()
-    } else {
-      el.select()
-    }
-    // Run once on mount; initialValue is fixed for the lifetime of the editor.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  // Callback ref focuses/selects once when the inline editor mounts. A stable
+  // identity keeps React from re-attaching it on every keystroke.
+  const attachInput = useCallback(
+    (el: HTMLInputElement | null) => {
+      if (!el) return
+      el.focus()
+      if (rename) {
+        const dotIndex = initialValue.lastIndexOf(".")
+        if (dotIndex > 0) el.setSelectionRange(0, dotIndex)
+        else el.select()
+      } else {
+        el.select()
+      }
+    },
+    [initialValue, rename]
+  )
 
   return (
     <Input
-      ref={inputRef}
+      ref={attachInput}
       value={val}
       onChange={(e) => setVal(e.target.value)}
       onKeyDown={(e) => {
@@ -111,7 +114,11 @@ export const FileTree = memo(forwardRef<FileTreeHandle, FileTreeProps>(function 
 ) {
   const { t } = useTranslation()
   const [dirChildren, setDirChildren] = useState<Record<string, FileEntry[]>>({})
-  const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set())
+  // The persisted expansion state is read in the initializer; callers remount
+  // the tree (key={rootPath}) when the root changes.
+  const [expandedDirs, setExpandedDirs] = useState<Set<string>>(
+    () => new Set(parseExpandedDirs(localStorage.getItem(treeExpandedStorageKey(rootPath))))
+  )
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [editing, setEditing] = useState<EditingState | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<FileEntry | null>(null)
@@ -142,24 +149,30 @@ export const FileTree = memo(forwardRef<FileTreeHandle, FileTreeProps>(function 
   )
 
   useEffect(() => {
-    setDirChildren({})
-    setKeyIndex(-1)
-    // Restore the previously expanded folders for this skill.
-    let stored: string[] = []
-    try {
-      stored = JSON.parse(localStorage.getItem(`filetree-expanded-${rootPath}`) ?? "[]")
-    } catch {}
-    setExpandedDirs(new Set(stored))
-    loadDir(rootPath)
-    for (const dir of stored) {
-      void loadDir(dir)
+    let cancelled = false
+    const root = rootPath
+    const dirs = [root, ...parseExpandedDirs(localStorage.getItem(treeExpandedStorageKey(root)))]
+    const loadInitial = async () => {
+      const loaded = await Promise.all(
+        dirs.map(async (dir) => [dir, await invoke<FileEntry[]>("list_directory", { path: dir })] as const)
+      )
+      if (cancelled) return
+      setDirChildren((prev) => {
+        const next = { ...prev }
+        for (const [dir, entries] of loaded) next[dir] = entries
+        return next
+      })
     }
-    // Run per skill switch; loadDir is stable.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    void loadInitial().catch(() => {
+      // Unreadable roots keep the empty state; the tree's refresh can retry.
+    })
+    return () => {
+      cancelled = true
+    }
   }, [rootPath])
 
   useEffect(() => {
-    localStorage.setItem(`filetree-expanded-${rootPath}`, JSON.stringify([...expandedDirs]))
+    localStorage.setItem(treeExpandedStorageKey(rootPath), JSON.stringify([...expandedDirs]))
   }, [expandedDirs, rootPath])
 
   const menuRef = useRef<HTMLDivElement>(null)
@@ -258,7 +271,7 @@ export const FileTree = memo(forwardRef<FileTreeHandle, FileTreeProps>(function 
     } catch (e) {
       toast(t("fileTree.revealFailed", { error: String(e) }), "error")
     }
-  }, [])
+  }, [t])
 
   const startRename = useCallback((entry: FileEntry) => {
     setContextMenu(null)
@@ -324,12 +337,28 @@ export const FileTree = memo(forwardRef<FileTreeHandle, FileTreeProps>(function 
     }
   }, [editing, flatEntries, keyIndex, toggleDir, onSelectFile])
 
-  const renderTree = (entries: FileEntry[], depth: number, indexRef: { current: number }) => {
+  // Index counter for data-idx/keyboard navigation; a plain local counter keeps
+  // render pure with respect to refs.
+  let renderIndex = 0
+
+  // Activation for tree items; keyboard activation stops propagation so the
+  // tree container does not handle the same key twice.
+  const onEntryKeyDown = (e: React.KeyboardEvent, entry: FileEntry) => {
+    // Inline inputs own their keyboard handling (commit/cancel).
+    if (editing) return
+    if (!isActivationKey(e.key)) return
+    e.preventDefault()
+    e.stopPropagation()
+    if (entry.is_dir) void toggleDir(entry)
+    else onSelectFile(entry.path)
+  }
+
+  const renderTree = (entries: FileEntry[], depth: number) => {
     const items: React.ReactNode[] = []
     const dirs = entries.filter((e) => e.is_dir)
     const files = entries.filter((e) => !e.is_dir)
     for (const entry of dirs) {
-      const idx = indexRef.current++
+      const idx = renderIndex++
       const isExpanded = expandedDirs.has(entry.path)
       const children = dirChildren[entry.path] || []
       const isEditingRename = editing?.type === "rename" && editing.originalPath === entry.path
@@ -338,13 +367,19 @@ export const FileTree = memo(forwardRef<FileTreeHandle, FileTreeProps>(function 
         <div key={entry.path}>
           <div
             data-idx={idx}
+            role="treeitem"
+            tabIndex={-1}
+            aria-level={depth + 1}
+            aria-expanded={isExpanded}
+            aria-selected={selectedPath === entry.path}
             className={`flex items-center gap-1 px-2 py-1 cursor-pointer text-xs ${
               selectedPath === entry.path
                 ? "bg-accent text-accent-foreground"
                 : "hover:bg-card/60"
             } ${keyIndex === idx ? "outline outline-1 -outline-offset-1 outline-ring/70" : ""}`}
             style={{ paddingLeft: `${depth * 16 + 8}px` }}
-            onClick={() => { setKeyIndex(idx); toggleDir(entry) }}
+            onClick={() => { setKeyIndex(idx); void toggleDir(entry) }}
+            onKeyDown={(e) => onEntryKeyDown(e, entry)}
             onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setContextMenu({ x: e.clientX, y: e.clientY, entry }) }}
           >
             <span className="text-[10px] text-muted-foreground w-3">{isExpanded ? "\u25BC" : "\u25B6"}</span>
@@ -376,14 +411,14 @@ export const FileTree = memo(forwardRef<FileTreeHandle, FileTreeProps>(function 
                   />
                 </div>
               )}
-              {renderTree(children, depth + 1, indexRef)}
+              {renderTree(children, depth + 1)}
             </>
           )}
         </div>
       )
     }
     for (const entry of files) {
-      const idx = indexRef.current++
+      const idx = renderIndex++
       const isEditingRename = editing?.type === "rename" && editing.originalPath === entry.path
       const ext = entry.extension?.toLowerCase() || ""
       const isText = TEXT_EXTENSIONS.has(ext)
@@ -392,6 +427,10 @@ export const FileTree = memo(forwardRef<FileTreeHandle, FileTreeProps>(function 
         <div
           key={entry.path}
           data-idx={idx}
+          role="treeitem"
+          tabIndex={-1}
+          aria-level={depth + 1}
+          aria-selected={selectedPath === entry.path}
           className={`flex items-center gap-1 px-2 py-1 cursor-pointer text-xs ${
             selectedPath === entry.path
               ? "bg-accent text-accent-foreground"
@@ -399,6 +438,7 @@ export const FileTree = memo(forwardRef<FileTreeHandle, FileTreeProps>(function 
           } ${keyIndex === idx ? "outline outline-1 -outline-offset-1 outline-ring/70" : ""}`}
           style={{ paddingLeft: `${depth * 16 + 24}px` }}
           onClick={() => { setKeyIndex(idx); onSelectFile(entry.path) }}
+          onKeyDown={(e) => onEntryKeyDown(e, entry)}
           onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setContextMenu({ x: e.clientX, y: e.clientY, entry }) }}
         >
           {isImage ? <span className="text-sm shrink-0">{'\u{1F5BC}'}</span> : isText ? <FileText size={14} className="text-muted-foreground shrink-0" /> : <FileText size={14} className="text-muted-foreground/50 shrink-0" />}
@@ -425,6 +465,8 @@ export const FileTree = memo(forwardRef<FileTreeHandle, FileTreeProps>(function 
   return (
     <div
       ref={containerRef}
+      role="tree"
+      aria-label={rootPath.split("/").pop() || t("fileTree.tree")}
       className="py-1 select-none outline-none"
       tabIndex={0}
       onKeyDown={onTreeKeyDown}
@@ -442,14 +484,15 @@ export const FileTree = memo(forwardRef<FileTreeHandle, FileTreeProps>(function 
           />
         </div>
       )}
-      {renderTree(rootLevel, 0, { current: 0 })}
+      {renderTree(rootLevel, 0)}
 
       {contextMenu && (
         <div
           ref={menuRef}
+          role="menu"
+          aria-label={t("fileTree.menu")}
           className="fixed z-50 min-w-[140px] rounded-md border border-border bg-popover p-1 text-xs shadow-md"
           style={{ left: contextMenu.x, top: contextMenu.y }}
-          onClick={(e) => e.stopPropagation()}
         >
           {contextMenu.entry.is_dir && (
             <>

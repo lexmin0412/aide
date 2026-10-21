@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Power,
@@ -111,10 +111,36 @@ export default function MCPPage() {
     void load().finally(() => setLoading(false));
   };
   useEffect(() => {
-    load().finally(() => setLoading(false));
+    let cancelled = false;
+    const init = async () => {
+      try {
+        const [serverList, toolList, driftList] = await Promise.all([
+          invoke<McpServer[]>("list_mcp_servers"),
+          invoke<ToolOption[]>("list_mcp_tools"),
+          invoke<McpDrift[]>("get_mcp_drift"),
+        ]);
+        if (cancelled) return;
+        setServers(serverList);
+        setTools(toolList);
+        setDrift(driftList);
+        setError(null);
+      } catch (e) {
+        if (!cancelled) setError(String(e));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    void init();
     invoke<AgentServerStatus>("get_agent_server")
-      .then(setAgent)
-      .catch(() => {});
+      .then((status) => {
+        if (!cancelled) setAgent(status);
+      })
+      .catch(() => {
+        // Agent access is optional; the toggle simply stays hidden.
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const save = async (updated: McpServer[]): Promise<boolean> => {
@@ -549,8 +575,6 @@ function AddServerDialog({
   onClose: () => void;
 }) {
   const { t } = useTranslation();
-  const [formSubmit, setFormSubmit] = useState<(() => void) | null>(null);
-  const [importSubmit, setImportSubmit] = useState<(() => void) | null>(null);
 
   return (
     <Dialog
@@ -588,28 +612,16 @@ function AddServerDialog({
             </button>
           </div>
         </DialogHeader>
-        <div className="overflow-y-auto h-[360px]">
-          {mode === "form" ? (
-            <ServerForm
-              server={server}
-              tools={tools}
-              onSave={(...params) => {
-                onSave(...params);
-              }}
-              onReady={setFormSubmit}
-            />
-          ) : (
-            <ImportJson onImport={onImport} onReady={setImportSubmit} />
-          )}
-        </div>
-        <div className="flex justify-end gap-2 pt-3 border-t border-border mt-2 shrink-0">
-          <Button variant="ghost" onClick={onClose}>
-            {t("common.cancel")}
-          </Button>
-          <Button onClick={mode === "form" ? formSubmit! : importSubmit!}>
-            {mode === "form" ? (server ? t("mcp.editor.save") : t("mcp.editor.add")) : t("mcp.editor.import")}
-          </Button>
-        </div>
+        {mode === "form" ? (
+          <ServerForm
+            server={server}
+            tools={tools}
+            onSave={onSave}
+            onCancel={onClose}
+          />
+        ) : (
+          <ImportJson onImport={onImport} onCancel={onClose} />
+        )}
       </DialogContent>
     </Dialog>
   );
@@ -619,12 +631,12 @@ function ServerForm({
   server,
   tools,
   onSave,
-  onReady,
+  onCancel,
 }: {
   server: McpServer | null;
   tools: ToolOption[];
   onSave: (s: McpServer) => void;
-  onReady: (fn: () => void) => void;
+  onCancel: () => void;
 }) {
   const { t } = useTranslation();
   const [name, setName] = useState(server?.name || "");
@@ -641,18 +653,6 @@ function ServerForm({
     Object.entries(server?.headers || {})
   );
 
-  useEffect(() => {
-    setName(server?.name || "");
-    setType(server?.url ? (server?.headers ? "streamable_http" : "sse") : "stdio");
-    setCommand(server?.command || "");
-    setArgs(server?.args?.join(" ") || "");
-    setUrl(server?.url || "");
-    setDesc(server?.description || "");
-    setTargets(server?.targets || []);
-    setEnvEntries(Object.entries(server?.env || {}));
-    setHeadersEntries(Object.entries(server?.headers || {}));
-  }, [server]);
-
   const submit = () => {
     if (!name.trim()) return;
     // Args accept either a JSON array (preserves spaces/quotes) or
@@ -665,7 +665,9 @@ function ServerForm({
         if (Array.isArray(arr) && arr.every((x) => typeof x === "string")) {
           parsedArgs = arr;
         }
-      } catch {}
+      } catch {
+        // Not a JSON array: fall back to whitespace-separated args below.
+      }
     }
     onSave({
       name: name.trim(),
@@ -688,15 +690,9 @@ function ServerForm({
       targets,
     });
   };
-  const submitRef = useRef(submit);
-  submitRef.current = submit;
-
-  useEffect(() => {
-    onReady(() => () => submitRef.current());
-  }, [server]);
-
   return (
-    <div className="space-y-3 py-1">
+    <div className="flex flex-col min-h-0">
+      <div className="overflow-y-auto h-[360px] space-y-3 py-1">
       <div className="space-y-1">
         <Label>{t("mcp.editor.name")}</Label>
         <Input
@@ -882,16 +878,40 @@ function ServerForm({
         </div>
       </div>
       )}
+      </div>
+      <div className="flex justify-end gap-2 pt-3 border-t border-border mt-2 shrink-0">
+        <Button variant="ghost" onClick={onCancel}>
+          {t("common.cancel")}
+        </Button>
+        <Button onClick={submit}>
+          {server ? t("mcp.editor.save") : t("mcp.editor.add")}
+        </Button>
+      </div>
     </div>
   );
 }
 
+interface ImportedMcpConfig {
+  command?: string | string[];
+  args?: string[] | null;
+  url?: string | null;
+  env?: Record<string, string> | null;
+  environment?: Record<string, string> | null;
+  headers?: Record<string, string> | null;
+  disabled?: boolean;
+  enabled?: boolean;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function ImportJson({
   onImport,
-  onReady,
+  onCancel,
 }: {
   onImport: (servers: McpServer[]) => void;
-  onReady: (fn: () => void) => void;
+  onCancel: () => void;
 }) {
   const { t } = useTranslation();
   const [json, setJson] = useState("");
@@ -899,34 +919,39 @@ function ImportJson({
 
   const doImport = () => {
     setError("");
-    let parsed: any;
+    let parsed: unknown;
     try {
       parsed = JSON.parse(json);
     } catch {
       setError(t("mcp.editor.invalidJson"));
       return;
     }
-    let map: Record<string, any> | undefined;
-    if (parsed.mcpServers && typeof parsed.mcpServers === "object")
-      map = parsed.mcpServers;
-    else if (parsed.mcp && typeof parsed.mcp === "object") map = parsed.mcp;
-    else if (typeof parsed === "object" && !Array.isArray(parsed)) map = parsed;
-    if (!map) {
+    if (!isRecord(parsed)) {
       setError(t("mcp.editor.expectedObject"));
       return;
     }
+    // Accept { mcpServers: {...} }, { mcp: {...} } and a bare server map.
+    const map = isRecord(parsed.mcpServers)
+      ? parsed.mcpServers
+      : isRecord(parsed.mcp)
+        ? parsed.mcp
+        : parsed;
     const entries = Object.entries(map);
     if (entries.length === 0) {
       setError(t("mcp.editor.noServers"));
       return;
     }
     onImport(
-      entries.map(([name, cfg]: [string, any]) => {
-        let cmd = cfg.command || null;
-        let args = cfg.args || null;
-        if (Array.isArray(cmd)) {
-          args = cmd.slice(1);
-          cmd = cmd[0];
+      entries.map(([name, raw]) => {
+        const cfg = (isRecord(raw) ? raw : {}) as ImportedMcpConfig;
+        let cmd: string | null = typeof cfg.command === "string" ? cfg.command : null;
+        let args: string[] | null = Array.isArray(cfg.args)
+          ? cfg.args.filter((arg): arg is string => typeof arg === "string")
+          : null;
+        // A command given as an array ("npx -y pkg") keeps args intact.
+        if (Array.isArray(cfg.command)) {
+          args = cfg.command.slice(1);
+          cmd = cfg.command[0] ?? null;
         }
         return {
           name,
@@ -943,22 +968,23 @@ function ImportJson({
     );
   };
 
-  const doImportRef = useRef(doImport);
-  doImportRef.current = doImport;
-
-  useEffect(() => {
-    onReady(() => () => doImportRef.current());
-  }, []);
-
   return (
-    <div className="space-y-3 py-1">
-      <Textarea
-        className="font-mono text-xs min-h-[200px]"
-        value={json}
-        onChange={(e) => setJson(e.target.value)}
-        placeholder={t("mcp.editor.importPlaceholder")}
-      />
-      {error && <p className="text-sm text-destructive">{error}</p>}
+    <div className="flex flex-col min-h-0">
+      <div className="overflow-y-auto h-[360px] space-y-3 py-1">
+        <Textarea
+          className="font-mono text-xs min-h-[200px]"
+          value={json}
+          onChange={(e) => setJson(e.target.value)}
+          placeholder={t("mcp.editor.importPlaceholder")}
+        />
+        {error && <p className="text-sm text-destructive">{error}</p>}
+      </div>
+      <div className="flex justify-end gap-2 pt-3 border-t border-border mt-2 shrink-0">
+        <Button variant="ghost" onClick={onCancel}>
+          {t("common.cancel")}
+        </Button>
+        <Button onClick={doImport}>{t("mcp.editor.import")}</Button>
+      </div>
     </div>
   );
 }

@@ -50,17 +50,25 @@ export default function SkillDetail({ skill, initialFile, onBack, onDelete, acti
     pendingLeaveTabs, requestLeave, resolveLeave, cancelLeave,
   } = useTabs({ active })
 
+  // Latest openFile without making the effect depend on the changing tab state.
+  const openFileRef = useRef(openFile)
+  useEffect(() => {
+    openFileRef.current = openFile
+  }, [openFile])
+
   useEffect(() => {
     const skillMd = rootPath + "/SKILL.md"
     const target = initialFile || skillMd
     invoke<boolean>("file_exists", { path: target })
       .then((exists) => {
         // Fall back to SKILL.md when the requested file is gone.
-        void openFile(exists ? target : skillMd)
+        void openFileRef.current(exists ? target : skillMd)
       })
-      .catch(() => {})
-    // Run when a skill is opened and when the palette asks for another file.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+      .catch(() => {
+        // Probe failed (file vanished): leave the tab strip untouched.
+      })
+    // Open the requested file when a skill is opened or the palette asks for
+    // another file within the same skill.
   }, [rootPath, initialFile])
 
   // Reflect the open skill in the window title.
@@ -170,7 +178,7 @@ export default function SkillDetail({ skill, initialFile, onBack, onDelete, acti
               </button>
             </div>
           </div>
-          <FileTree ref={treeRef} rootPath={rootPath} onSelectFile={openFile} selectedPath={activeTabPath} onFileDeleted={handleFileDeleted} onFileRenamed={handleFileRenamed} />
+          <FileTree key={rootPath} ref={treeRef} rootPath={rootPath} onSelectFile={openFile} selectedPath={activeTabPath} onFileDeleted={handleFileDeleted} onFileRenamed={handleFileRenamed} />
         </div>
         <div className="flex-1 flex flex-col overflow-hidden">
           <TabBar tabs={tabs} activeTabPath={activeTabPath} onSelect={switchTab} onClose={closeTab} />

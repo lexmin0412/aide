@@ -50,7 +50,7 @@ export function GitSyncDialog({ open, skills, onClose, onChanged }: GitSyncDialo
     invoke<GitRemotesConfig>("get_git_config")
       .then(setConfig)
       .catch((e) => toast(t("git.loadFailed", { error: String(e) }), "error"))
-  }, [open])
+  }, [open, t])
 
   const defaultScope = config.remotes.find((r) => r.is_default)?.name ?? config.remotes[0]?.name ?? null
 
@@ -232,7 +232,6 @@ export function GitSyncDialog({ open, skills, onClose, onChanged }: GitSyncDialo
               <Label className="text-[11px] text-muted-foreground">{t("git.addScope")}</Label>
               <div className="flex gap-2">
                 <Input
-                  autoFocus
                   value={form.name}
                   onChange={(e) => setForm({ ...form, name: e.target.value })}
                   placeholder={t("git.scopePlaceholder")}

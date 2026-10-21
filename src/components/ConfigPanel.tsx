@@ -42,25 +42,51 @@ export function ConfigPanel({ active = true, registerLeaveGuard }: ConfigPanelPr
     pendingLeaveTabs, requestLeave, resolveLeave, cancelLeave,
   } = useTabs({ active })
 
-  const load = useCallback(() => {
-    setLoading(true)
-    setError(null)
-    Promise.all([
+  // Fetching is separated from state writes so the mount effect only updates
+  // state after an await (no synchronous setState in the effect body).
+  const fetchTools = useCallback(async () => {
+    const [list, home] = await Promise.all([
       invoke<ToolInfo[]>("list_tools"),
       invoke<string>("get_home_dir"),
     ])
-      .then(([list, home]) => {
-        setTools(list)
-        setHomeDir(home)
-        if (list.length > 0) setActiveTool((prev) => prev ?? list[0].key)
-      })
-      .catch((e) => setError(String(e)))
-      .finally(() => setLoading(false))
+    return { list, home }
   }, [])
 
   useEffect(() => {
-    load()
-  }, [load])
+    let cancelled = false
+    const init = async () => {
+      try {
+        const { list, home } = await fetchTools()
+        if (cancelled) return
+        setTools(list)
+        setHomeDir(home)
+        if (list.length > 0) setActiveTool((prev) => prev ?? list[0].key)
+        setError(null)
+      } catch (e) {
+        if (!cancelled) setError(String(e))
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    void init()
+    return () => {
+      cancelled = true
+    }
+  }, [fetchTools])
+
+  const retryLoad = () => {
+    setLoading(true)
+    setError(null)
+    void fetchTools()
+      .then(({ list, home }) => {
+        setTools(list)
+        setHomeDir(home)
+        if (list.length > 0) setActiveTool((prev) => prev ?? list[0].key)
+        setError(null)
+      })
+      .catch((e) => setError(String(e)))
+      .finally(() => setLoading(false))
+  }
 
   // App-level navigation (top nav) is gated through this guard; tool switching
   // inside the panel uses the same requestLeave flow below.
@@ -117,7 +143,7 @@ export function ConfigPanel({ active = true, registerLeaveGuard }: ConfigPanelPr
         {loading ? (
           <div className="flex-1 p-6"><CardGridSkeleton count={3} /></div>
         ) : error ? (
-          <PageError message={t("configs.loadFailed", { error })} onRetry={load} />
+          <PageError message={t("configs.loadFailed", { error })} onRetry={retryLoad} />
         ) : activeToolInfo && rootPath ? (
           <>
             {sidebarDivider}

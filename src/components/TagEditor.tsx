@@ -1,4 +1,4 @@
-import { useState, useRef, useMemo, useCallback } from "react"
+import { useState, useRef, useMemo, useCallback, useEffect } from "react"
 import { invoke } from "@tauri-apps/api/core"
 import { toast } from "@/lib/toast"
 import { useTranslation } from "react-i18next"
@@ -18,8 +18,11 @@ export function TagEditor({ path, initialTags, allTags, onSave, onClose }: TagEd
   const [saving, setSaving] = useState(false)
   const [focusIndex, setFocusIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
-  const tagsRef = useRef(tags)
-  tagsRef.current = tags
+
+  // Focus the tag input as soon as the popover content mounts.
+  useEffect(() => {
+    inputRef.current?.focus()
+  }, [])
 
   const suggestions = useMemo(() => {
     if (!input.trim()) return []
@@ -42,7 +45,6 @@ export function TagEditor({ path, initialTags, allTags, onSave, onClose }: TagEd
   }, [])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
-    const currentTags = tagsRef.current
     const val = e.currentTarget.value
     if (suggestions.length > 0 && e.key === "ArrowDown") {
       e.preventDefault()
@@ -63,10 +65,10 @@ export function TagEditor({ path, initialTags, allTags, onSave, onClose }: TagEd
       }
       return
     }
-    if (e.key === "Backspace" && !val && currentTags.length > 0) {
-      removeTag(currentTags[currentTags.length - 1])
+    if (e.key === "Backspace" && !val && tags.length > 0) {
+      removeTag(tags[tags.length - 1])
     }
-  }, [suggestions, focusIndex, addTag, removeTag])
+  }, [suggestions, focusIndex, addTag, removeTag, tags])
 
   const handleSave = useCallback(async () => {
     setSaving(true)
@@ -79,10 +81,14 @@ export function TagEditor({ path, initialTags, allTags, onSave, onClose }: TagEd
     } finally {
       setSaving(false)
     }
-  }, [path, tags, onSave, onClose])
+  }, [path, tags, onSave, onClose, t])
 
   return (
-    <div className="p-2" onClick={(e) => e.stopPropagation()}>
+    <div
+      className="p-2"
+      role="presentation"
+      onClick={(e) => e.stopPropagation()}
+    >
       <div className="flex flex-wrap gap-1.5 min-h-[28px] mb-2">
         {tags.map((t) => (
           <span
@@ -105,7 +111,6 @@ export function TagEditor({ path, initialTags, allTags, onSave, onClose }: TagEd
       <div className="relative mb-3">
         <input
           ref={inputRef}
-          autoFocus
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}

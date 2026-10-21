@@ -11,6 +11,13 @@ import {
 import { Button } from "@/components/ui/button"
 import { toast } from "@/lib/toast"
 import { useTranslation } from "react-i18next"
+import {
+  isSearchPending,
+  normalizeSearchQuery,
+  searchResults,
+  shouldSearch,
+  type SettledSearch,
+} from "@/lib/searchState"
 import type { SkillInfo } from "../types"
 
 interface RegistrySkill {
@@ -42,48 +49,57 @@ function formatInstalls(n: number): string {
 export function MarketDialog({ open, skills, onClose, onInstalled }: MarketDialogProps) {
   const { t } = useTranslation()
   const [query, setQuery] = useState("")
-  const [results, setResults] = useState<RegistrySkill[]>([])
-  const [searching, setSearching] = useState(false)
+  // Registry results are stored with the query they belong to; the visible list
+  // and the "searching" indicator are derived below instead of being reset
+  // synchronously inside an effect.
+  const [settled, setSettled] = useState<SettledSearch<RegistrySkill>>({ query: "", results: [] })
   const [installing, setInstalling] = useState<string | null>(null)
   const [updates, setUpdates] = useState<SkillUpdateInfo[]>([])
   const [updating, setUpdating] = useState<string | null>(null)
   // Ignore responses for stale (debounced) queries.
   const searchSeqRef = useRef(0)
+  const searchInputRef = useRef<HTMLInputElement>(null)
+
+  // Reset the query when the dialog opens (adjust-state-during-render pattern).
+  const [prevOpen, setPrevOpen] = useState(open)
+  if (open !== prevOpen) {
+    setPrevOpen(open)
+    if (open) setQuery("")
+  }
+  const normalizedQuery = normalizeSearchQuery(query)
 
   useEffect(() => {
     if (!open) return
-    setQuery("")
-    setResults([])
     invoke<SkillUpdateInfo[]>("check_skill_updates")
       .then(setUpdates)
-      .catch(() => {})
+      .catch(() => {
+        // Update badges are optional; a failed check leaves them empty.
+      })
+    const frame = requestAnimationFrame(() => searchInputRef.current?.focus())
+    return () => cancelAnimationFrame(frame)
   }, [open])
 
   useEffect(() => {
-    const q = query.trim()
+    if (!shouldSearch(normalizedQuery)) return
     const seq = ++searchSeqRef.current
-    if (q.length < 2) {
-      setResults([])
-      setSearching(false)
-      return
-    }
-    setSearching(true)
     const timer = setTimeout(() => {
-      invoke<RegistrySkill[]>("search_registry", { query: q })
+      invoke<RegistrySkill[]>("search_registry", { query: normalizedQuery })
         .then((list) => {
-          if (searchSeqRef.current === seq) setResults(list)
+          if (searchSeqRef.current === seq) {
+            setSettled({ query: normalizedQuery, results: list })
+          }
         })
         .catch((e) => {
           if (searchSeqRef.current !== seq) return
           toast(t("market.registrySearchFailed", { error: String(e) }), "error")
-          setResults([])
-        })
-        .finally(() => {
-          if (searchSeqRef.current === seq) setSearching(false)
+          setSettled({ query: normalizedQuery, results: [] })
         })
     }, 300)
     return () => clearTimeout(timer)
-  }, [query])
+  }, [normalizedQuery, t])
+
+  const results = searchResults(query, settled)
+  const searching = isSearchPending(query, settled)
 
   const isInstalled = (id: string) => {
     const skillName = id.split("/").pop() || ""
@@ -167,10 +183,10 @@ export function MarketDialog({ open, skills, onClose, onInstalled }: MarketDialo
         <div className="flex items-center gap-2 border border-input rounded-lg px-2.5 h-8">
           <Search size={13} className="text-muted-foreground shrink-0" />
           <input
+            ref={searchInputRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder={t("market.searchPlaceholder")}
-            autoFocus
             className="w-full bg-transparent outline-none text-xs placeholder:text-muted-foreground"
           />
         </div>
@@ -225,7 +241,7 @@ export function MarketDialog({ open, skills, onClose, onInstalled }: MarketDialo
             rel="noopener noreferrer"
             className="inline-flex items-center gap-0.5 hover:text-foreground"
           >
-            open site <ExternalLink size={9} />
+            {t("market.openSite")} <ExternalLink size={9} />
           </a>
         </p>
       </DialogContent>

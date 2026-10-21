@@ -8,6 +8,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { normalizeSearchQuery, searchResults, shouldSearch, type SettledSearch } from "@/lib/searchState"
 import type { SkillInfo } from "../types"
 
 interface SkillFileMatch {
@@ -30,41 +31,68 @@ export function CommandPalette({ open, onClose, onSelectSkill, onSelectFileMatch
   const [skills, setSkills] = useState<SkillInfo[]>([])
   const [query, setQuery] = useState("")
   const [focusIndex, setFocusIndex] = useState(0)
-  const [fileMatches, setFileMatches] = useState<SkillFileMatch[]>([])
+  // File matches are stored together with the query they belong to; the visible
+  // list is derived below instead of being reset synchronously in an effect.
+  const [settledMatches, setSettledMatches] = useState<SettledSearch<SkillFileMatch>>({
+    query: "",
+    results: [],
+  })
   const inputRef = useRef<HTMLInputElement>(null)
   // Request sequencing: a slow response for an older query must not overwrite
   // the results of a newer one.
   const searchSeqRef = useRef(0)
 
+  // Reset the query when the palette opens (documented "adjust state when a prop
+  // changes" pattern instead of a reset effect).
+  const [prevOpen, setPrevOpen] = useState(open)
+  if (open !== prevOpen) {
+    setPrevOpen(open)
+    if (open) {
+      setQuery("")
+      setFocusIndex(0)
+    }
+  }
+  const normalizedQuery = normalizeSearchQuery(query)
+  const [prevQuery, setPrevQuery] = useState(normalizedQuery)
+  if (normalizedQuery !== prevQuery) {
+    setPrevQuery(normalizedQuery)
+    setFocusIndex(0)
+  }
+
   useEffect(() => {
     if (!open) return
-    setQuery("")
-    setFocusIndex(0)
-    setFileMatches([])
-    invoke<SkillInfo[]>("list_skills").then(setSkills).catch(() => {})
+    invoke<SkillInfo[]>("list_skills")
+      .then(setSkills)
+      .catch(() => {
+        // Keep the last known skill list; the palette stays usable.
+      })
     const timer = setTimeout(() => inputRef.current?.focus(), 0)
     return () => clearTimeout(timer)
   }, [open])
 
-  // Full-text search across skill files, debounced.
+  // Full-text search across skill files, debounced. Responses for stale queries
+  // are ignored, and the visible list is derived so short queries need no reset.
   useEffect(() => {
-    const q = query.trim()
+    if (!shouldSearch(normalizedQuery)) return
     const seq = ++searchSeqRef.current
-    if (q.length < 2) {
-      setFileMatches([])
-      return
-    }
     const timer = setTimeout(() => {
-      invoke<SkillFileMatch[]>("search_skills", { query: q })
+      invoke<SkillFileMatch[]>("search_skills", { query: normalizedQuery })
         .then((matches) => {
-          if (searchSeqRef.current === seq) setFileMatches(matches)
+          if (searchSeqRef.current === seq) {
+            setSettledMatches({ query: normalizedQuery, results: matches })
+          }
         })
         .catch(() => {
-          if (searchSeqRef.current === seq) setFileMatches([])
+          // Search failures degrade to "no file matches"; skill results remain.
+          if (searchSeqRef.current === seq) {
+            setSettledMatches({ query: normalizedQuery, results: [] })
+          }
         })
     }, 150)
     return () => clearTimeout(timer)
-  }, [query])
+  }, [normalizedQuery])
+
+  const fileMatches = searchResults(query, settledMatches)
 
   const results = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -81,11 +109,10 @@ export function CommandPalette({ open, onClose, onSelectSkill, onSelectFileMatch
       .slice(0, 8)
   }, [skills, query])
 
-  useEffect(() => {
-    setFocusIndex(0)
-  }, [query])
-
   const total = results.length + fileMatches.length
+  // Clamp instead of resetting in an effect so the highlight never points past
+  // the end of the current result list.
+  const activeIndex = Math.min(focusIndex, Math.max(0, total - 1))
 
   const chooseIndex = (index: number) => {
     if (index < results.length) {
@@ -104,13 +131,13 @@ export function CommandPalette({ open, onClose, onSelectSkill, onSelectFileMatch
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "ArrowDown") {
       e.preventDefault()
-      setFocusIndex((prev) => Math.min(prev + 1, total - 1))
+      setFocusIndex(Math.min(activeIndex + 1, total - 1))
     } else if (e.key === "ArrowUp") {
       e.preventDefault()
-      setFocusIndex((prev) => Math.max(prev - 1, 0))
+      setFocusIndex(Math.max(activeIndex - 1, 0))
     } else if (e.key === "Enter" && total > 0) {
       e.preventDefault()
-      chooseIndex(focusIndex)
+      chooseIndex(activeIndex)
     }
   }
 
@@ -145,7 +172,7 @@ export function CommandPalette({ open, onClose, onSelectSkill, onSelectFileMatch
                 <button
                   key={s.path}
                   className={`w-full text-left px-3 py-2 rounded-md transition-colors ${
-                    i === focusIndex ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"
+                    i === activeIndex ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"
                   }`}
                   onClick={() => chooseIndex(i)}
                   onMouseEnter={() => setFocusIndex(i)}
@@ -166,7 +193,7 @@ export function CommandPalette({ open, onClose, onSelectSkill, onSelectFileMatch
                   <button
                     key={m.file_path + m.line_number}
                     className={`w-full text-left px-3 py-2 rounded-md transition-colors ${
-                      index === focusIndex ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"
+                      index === activeIndex ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"
                     }`}
                     onClick={() => chooseIndex(index)}
                     onMouseEnter={() => setFocusIndex(index)}
