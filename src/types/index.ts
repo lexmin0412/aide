@@ -143,3 +143,59 @@ export interface McpCleanupResult {
   skipped: boolean
   message: string
 }
+
+/** Aggregated doctor report surfaced by the Health page. */
+export interface DoctorSkillsReport {
+  total: number
+  linked: number
+  broken: string[]
+  updates_available: number
+  update_error?: string | null
+}
+
+export interface DoctorToolReport {
+  key: string
+  name: string
+  status: string
+  global_skills: string
+}
+
+export interface DoctorMcpReport {
+  servers: number
+  disabled: number
+  drift: McpDrift[]
+  errors: string[]
+}
+
+export interface DoctorModelsReport {
+  profiles: number
+  missing_targets: string[]
+  errors: string[]
+}
+
+export interface DoctorConfigError {
+  path: string
+  error: string
+}
+
+export interface DoctorAgentReport {
+  enabled: boolean
+  binary_available: boolean
+}
+
+export interface DoctorAuditReport {
+  path: string
+  size_bytes: number
+}
+
+export interface DoctorReport {
+  /** Report timestamp in unix seconds. */
+  generated_at: number
+  skills: DoctorSkillsReport
+  tools: DoctorToolReport[]
+  mcp: DoctorMcpReport
+  models: DoctorModelsReport
+  configs: DoctorConfigError[]
+  agent: DoctorAgentReport
+  audit: DoctorAuditReport
+}

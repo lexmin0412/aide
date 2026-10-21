@@ -8,6 +8,7 @@ import SkillDetail from "./components/SkillDetail"
 import { ConfigPanel } from "./components/ConfigPanel"
 import MCPPage from "./components/MCPPage"
 import ModelPage from "./components/ModelPage"
+import HealthPage from "./components/HealthPage"
 import { UpdateDialog } from "./components/UpdateDialog"
 import { CommandPalette } from "./components/CommandPalette"
 import { Logo } from "./components/Logo"
@@ -17,7 +18,7 @@ import type { ThemePref } from "@/lib/theme"
 import type { SkillInfo } from "./types"
 import "./App.css"
 
-type Page = "skills" | "mcp" | "models" | "configs"
+type Page = "skills" | "mcp" | "models" | "configs" | "health"
 
 const THEME_ICONS: Record<ThemePref, React.ReactNode> = {
   system: (
@@ -104,6 +105,7 @@ export default function App() {
     { key: "mcp", label: t("nav.mcp") },
     { key: "models", label: t("nav.models") },
     { key: "configs", label: t("nav.configs") },
+    { key: "health", label: t("nav.health") },
   ]
 
   const markVisited = useCallback((target: Page) => {
@@ -303,6 +305,11 @@ export default function App() {
         {visitedPages.has("configs") && (
           <div className={`absolute inset-0 ${page === "configs" ? "" : "hidden"}`}>
             <ConfigPanel active={page === "configs"} registerLeaveGuard={registerConfigsLeaveGuard} />
+          </div>
+        )}
+        {visitedPages.has("health") && (
+          <div className={`absolute inset-0 ${page === "health" ? "" : "hidden"}`}>
+            <HealthPage active={page === "health"} />
           </div>
         )}
       </div>

@@ -100,6 +100,36 @@ export default function SkillGrid({ onSelectSkill }: SkillGridProps) {
     el.addEventListener("scroll", onScroll, { passive: true })
     return () => el.removeEventListener("scroll", onScroll)
   }, [])
+  // Silently refresh when the window regains focus: picks up SKILL.md/skills-dir
+  // edits made outside the app without a skeleton flash or toast. Debounced so
+  // rapid focus/visibility events collapse into a single list_skills call.
+  useEffect(() => {
+    let timer: number | undefined
+    const refreshSilently = () => {
+      if (document.visibilityState === "hidden") return
+      // A modal dialog owns the screen; do not shuffle the grid underneath it.
+      if (document.querySelector('[data-slot="dialog-content"]')) return
+      window.clearTimeout(timer)
+      timer = window.setTimeout(() => {
+        invoke<SkillInfo[]>("list_skills")
+          .then((list) => setSkills(list))
+          .catch(() => {
+            // Best-effort refresh: keep the last known grid on failure.
+          })
+      }, 500)
+    }
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") refreshSilently()
+    }
+    window.addEventListener("focus", refreshSilently)
+    document.addEventListener("visibilitychange", onVisibilityChange)
+    return () => {
+      window.clearTimeout(timer)
+      window.removeEventListener("focus", refreshSilently)
+      document.removeEventListener("visibilitychange", onVisibilityChange)
+    }
+  }, [])
+
 
   useEffect(() => {
     if (loading || restoredRef.current) return

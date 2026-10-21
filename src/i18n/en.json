@@ -21,7 +21,8 @@
     "search": "Search",
     "theme": "Theme: {{mode}}",
     "checkUpdates": "Check for updates",
-    "github": "GitHub"
+    "github": "GitHub",
+    "health": "Health"
   },
   "skills": {
     "title": "Skills",
@@ -369,5 +370,64 @@
   },
   "lang": {
     "title": "Language: {{lang}}"
+  },
+  "health": {
+    "title": "Health",
+    "checking": "Running checks...",
+    "unknownTime": "unknown",
+    "summary": "{{count}} issue(s) · checked {{time}}",
+    "issues": "{{count}} issue(s) in total",
+    "refresh": "Re-run checks",
+    "allGoodTitle": "All consistent",
+    "allGoodDesc": "Skills, tool links, MCP configs and model profiles are in sync.",
+    "sections": {
+      "skills": "Skills",
+      "tools": "Tools",
+      "mcp": "MCP",
+      "models": "Models",
+      "configs": "Configs",
+      "agent": "Agent access",
+      "audit": "Audit log"
+    },
+    "skills": {
+      "summary": "{{total}} installed · {{linked}} linked",
+      "broken": "Broken skill link: {{name}}",
+      "updates": "{{count}} update(s) available",
+      "updateError": "Update check failed: {{error}}",
+      "sync": "Sync to all tools",
+      "checkUpdates": "Check updates"
+    },
+    "mcp": {
+      "summary": "{{servers}} server(s) · {{disabled}} disabled",
+      "drift": "{{count}} tool config(s) are out of sync",
+      "missing": "missing: {{names}}",
+      "leftover": "leftover: {{names}}",
+      "cleanup": "Clean up drift"
+    },
+    "models": {
+      "summary": "{{count}} model profile(s)",
+      "missingTargets": "{{count}} profile(s) missing sync targets: {{names}}",
+      "sync": "Sync all profiles"
+    },
+    "configs": {
+      "errors": "{{count}} config file(s) failed to parse"
+    },
+    "agent": {
+      "enabled": "Agent access enabled",
+      "disabled": "Agent access disabled",
+      "noBinary": "aide-mcp binary not found next to the app"
+    },
+    "audit": {
+      "size": "Audit log: {{size}}"
+    },
+    "actions": {
+      "running": "Running...",
+      "failed": "Repair failed: {{error}}",
+      "loadFailed": "Failed to load the health report: {{error}}",
+      "toolsDone": "Synced {{ok}}/{{total}} tool(s)",
+      "updatesChecked": "Check finished: {{count}} skill update(s) available",
+      "driftCleaned": "Updated {{updated}} tool config(s), {{skipped}} skipped",
+      "modelsSynced": "Synced {{count}} model target(s)"
+    }
   }
 }

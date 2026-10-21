@@ -21,7 +21,8 @@
     "search": "搜索",
     "theme": "主题：{{mode}}",
     "checkUpdates": "检查更新",
-    "github": "GitHub"
+    "github": "GitHub",
+    "health": "健康"
   },
   "skills": {
     "title": "技能",
@@ -369,5 +370,64 @@
   },
   "lang": {
     "title": "语言：{{lang}}"
+  },
+  "health": {
+    "title": "健康检查",
+    "checking": "正在检查...",
+    "unknownTime": "未知",
+    "summary": "发现 {{count}} 个问题 · 检查于 {{time}}",
+    "issues": "共 {{count}} 个问题",
+    "refresh": "重新检查",
+    "allGoodTitle": "一切正常",
+    "allGoodDesc": "技能、工具链接、MCP 配置与模型配置均已同步。",
+    "sections": {
+      "skills": "技能",
+      "tools": "工具",
+      "mcp": "MCP",
+      "models": "模型",
+      "configs": "配置文件",
+      "agent": "Agent 接入",
+      "audit": "审计日志"
+    },
+    "skills": {
+      "summary": "已安装 {{total}} 个 · 已关联 {{linked}} 个",
+      "broken": "失效的技能链接：{{name}}",
+      "updates": "{{count}} 个技能可更新",
+      "updateError": "检查更新失败：{{error}}",
+      "sync": "同步到所有工具",
+      "checkUpdates": "检查更新"
+    },
+    "mcp": {
+      "summary": "{{servers}} 个服务器 · {{disabled}} 个已禁用",
+      "drift": "{{count}} 个工具的配置不一致",
+      "missing": "缺少：{{names}}",
+      "leftover": "多余：{{names}}",
+      "cleanup": "清理配置不一致"
+    },
+    "models": {
+      "summary": "{{count}} 个模型配置",
+      "missingTargets": "{{count}} 个配置缺少同步目标：{{names}}",
+      "sync": "同步全部配置"
+    },
+    "configs": {
+      "errors": "{{count}} 个配置文件解析失败"
+    },
+    "agent": {
+      "enabled": "Agent 接入已启用",
+      "disabled": "Agent 接入未启用",
+      "noBinary": "未在应用旁找到 aide-mcp 二进制"
+    },
+    "audit": {
+      "size": "审计日志：{{size}}"
+    },
+    "actions": {
+      "running": "执行中...",
+      "failed": "修复失败：{{error}}",
+      "loadFailed": "加载健康报告失败：{{error}}",
+      "toolsDone": "已同步 {{ok}}/{{total}} 个工具",
+      "updatesChecked": "检查完成：{{count}} 个技能可更新",
+      "driftCleaned": "已更新 {{updated}} 个工具配置，{{skipped}} 个跳过",
+      "modelsSynced": "已同步 {{count}} 个模型目标"
+    }
   }
 }
