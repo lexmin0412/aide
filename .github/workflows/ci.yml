@@ -104,5 +104,11 @@ jobs:
 
       - name: Test (app + core)
         run: |
-          cargo test --manifest-path src-tauri/Cargo.toml --lib
-          cargo test --manifest-path src-tauri/core/Cargo.toml --lib
+          status=0
+          cargo test --manifest-path src-tauri/Cargo.toml --lib 2>&1 | tee /tmp/test-app.log || status=1
+          cargo test --manifest-path src-tauri/core/Cargo.toml --lib 2>&1 | tee /tmp/test-core.log || status=1
+          if [ "$status" -ne 0 ]; then
+            grep -hE "^(error|failures:|thread)" /tmp/test-app.log /tmp/test-core.log \
+              | head -30 | sed 's/^/::error::/' || true
+            exit 1
+          fi
